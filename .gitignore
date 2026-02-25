@@ -1,6 +1,23 @@
-# Environment variables
-.env
-
-# Node.js
+# Dependency'lar
 node_modules/
-npm-debug.log
+package-lock.json
+
+# Maxfiy ma'lumotlar (Buni aslo push qilmang!)
+.env
+.env.local
+.env.production
+
+# Build fayllari
+dist/
+build/
+
+# Loglar va debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+logs/
+*.log
+
+# Tizim fayllari
+.DS_Store
+Thumbs.db

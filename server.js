@@ -27,34 +27,35 @@ const server = http.createServer(app);
 // ====================================
 // 🔐 CORS KONFIGURATSIYASI (TO'G'RILANGAN)
 // ====================================
+
 const allowedOrigins = [
   'http://localhost:3000',
   'http://localhost:3001',
   'http://localhost:8081',
   'http://localhost:19006', // Expo web
-  'http://0.0.0.0:8081', // Mobil qurilmalar uchun (IP manzilingizga o'zgartiring)
+  'http://0.0.0.0:8081',    // Mobil qurilmalar uchun (IP manzilingizga o'zgartiring)
   ...(process.env.NODE_ENV === 'production' 
-    ? ['https://shoxpospro-6os2.onrender.com'] 
+    ? [
+        'https://shoxpospro.uz',
+        'http://shoxpospro.uz',
+        'https://www.shoxpospro.uz',
+        'http://www.shoxpospro.uz'
+      ] 
     : [])
 ];
 
 app.use(cors({
   origin: function (origin, callback) {
-    // Allow requests with no origin (mobile apps, curl, Postman)
-    if (!origin) return callback(null, true);
-    
-    if (allowedOrigins.indexOf(origin) !== -1) {
+    if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
-      console.warn(`❌ CORS blocked: ${origin}`);
-      callback(new Error('CORS policy violation'));
+      console.error("❌ Blocked by CORS:", origin);
+      callback(null, false); // 500 o‘rniga 403 qaytaradi
     }
   },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'CSRF-Token', 'X-Requested-With'],
-  exposedHeaders: ['CSRF-Token']
+  credentials: true
 }));
+
 
 // ====================================
 // 🛡️ HELMET KONFIGURATSIYASI
