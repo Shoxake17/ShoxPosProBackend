@@ -8,7 +8,7 @@ exports.add = async (token) => {
   console.log(`⛔ Token blacklistga qo‘shildi: ${token}`);
 };
 
-// 🔍 Token blacklistda borligini tekshirish
+// 🔍 Token blacklistda borligini tekshirilsinmi?
 exports.isBlacklisted = async (token) => {
   return blacklist.has(token);
 };
