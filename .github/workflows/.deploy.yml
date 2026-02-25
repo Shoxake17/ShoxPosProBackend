@@ -6,7 +6,6 @@ on:
 
 jobs:
   deploy:
-    # BU YERDA ENG MUHIM O'ZGARISH!
     runs-on: self-hosted
     steps:
       - name: Kodni serverga yuklash (Checkout)
@@ -17,10 +16,14 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Dependency-larni yangilash
+      - name: Kodni asosiy papkaga ko'chirish (Sync)
         run: |
-          npm install --production
+          # Yangi kodni projects papkasiga o'tkazamiz
+          rsync -avz --exclude '.env' --exclude 'node_modules' --exclude '.git' ./ ~/projects/ShoxPosProBackend/
 
-      - name: Loyihani qayta ishga tushirish (PM2)
+      - name: Loyihani yangilash va Restart (PM2)
         run: |
+          # Asosiy papkaga kirib, PM2-ni restart qilamiz
+          cd ~/projects/ShoxPosProBackend
+          npm install --production
           pm2 restart ShoxPosProBackend || pm2 start server.js --name "ShoxPosProBackend"
