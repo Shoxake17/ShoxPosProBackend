@@ -1,4 +1,4 @@
-name: ShoxPosPro Backend CI/CD v1 update
+name: ShoxPosPro Backend CI/CD v2 update
 
 on:
   push:
