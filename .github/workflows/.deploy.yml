@@ -11,19 +11,14 @@ jobs:
       - name: Kodni serverga yuklash (Checkout)
         uses: actions/checkout@v4
 
-      - name: Node.js o'rnatish
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
 
       - name: Kodni asosiy papkaga ko'chirish (Sync)
         run: |
-          # Yangi kodni projects papkasiga o'tkazamiz
           rsync -avz --exclude '.env' --exclude 'node_modules' --exclude '.git' ./ ~/projects/ShoxPosProBackend/
 
       - name: Loyihani yangilash va Restart (PM2)
         run: |
-          # Asosiy papkaga kirib, PM2-ni restart qilamiz
           cd ~/projects/ShoxPosProBackend
+          # Tizimdagi npm va node ishlatiladi
           npm install --production
           pm2 restart ShoxPosProBackend || pm2 start server.js --name "ShoxPosProBackend"
