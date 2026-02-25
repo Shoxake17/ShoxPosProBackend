@@ -23,32 +23,54 @@ const server = http.createServer(app);
 // ====================================
 // 🔐 CORS KONFIGURATSIYASI
 // ====================================
+
 const allowedOrigins = [
   'http://localhost:3000',
   'http://localhost:3001',
   'http://localhost:8081',
+<<<<<<< HEAD
   'http://localhost:19006',
   'http://0.0.0.0:8081',
   ...(process.env.NODE_ENV === 'production'
     ? ['https://shoxpospro-6os2.onrender.com']
+=======
+  'http://localhost:19006', // Expo web
+  'http://0.0.0.0:8081',    // Mobil qurilmalar uchun (IP manzilingizga o'zgartiring)
+  ...(process.env.NODE_ENV === 'production' 
+    ? [
+        'https://shoxpospro.uz',
+        'http://shoxpospro.uz',
+        'https://www.shoxpospro.uz',
+        'http://www.shoxpospro.uz'
+      ] 
+>>>>>>> b138d7144eb4cfa33964253d1efbbebd10ba6f2a
     : [])
 ];
 
 app.use(cors({
   origin: function (origin, callback) {
+<<<<<<< HEAD
     if (!origin) return callback(null, true);
     if (allowedOrigins.indexOf(origin) !== -1) {
+=======
+    if (!origin || allowedOrigins.includes(origin)) {
+>>>>>>> b138d7144eb4cfa33964253d1efbbebd10ba6f2a
       callback(null, true);
     } else {
-      console.warn(`❌ CORS blocked: ${origin}`);
-      callback(new Error('CORS policy violation'));
+      console.error("❌ Blocked by CORS:", origin);
+      callback(null, false); // 500 o‘rniga 403 qaytaradi
     }
   },
+<<<<<<< HEAD
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'CSRF-Token', 'X-CSRF-Token', 'X-Requested-With'],
   exposedHeaders: ['CSRF-Token']
+=======
+  credentials: true
+>>>>>>> b138d7144eb4cfa33964253d1efbbebd10ba6f2a
 }));
+
 
 // ====================================
 // 🛡️ HELMET

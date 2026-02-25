@@ -21,7 +21,7 @@
     "cors": "^2.8.5",
     "csurf": "^1.11.0",
     "cyrillic-to-translit-js": "^3.2.1",
-    "dotenv": "^17.2.1",
+    "dotenv": "^17.2.4",
     "dotenv-safe": "^9.1.0",
     "envalid": "^8.1.0",
     "escpos": "^3.0.0-alpha.6",
