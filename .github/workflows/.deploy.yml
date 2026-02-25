@@ -1,4 +1,4 @@
-name: Deploy ShoxPosPro
+name: Deploy ShoxPosPro v1
 
 on:
   push:
