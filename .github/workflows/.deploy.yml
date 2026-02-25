@@ -1,40 +1,26 @@
-name: ShoxPosPro Backend CI/CD v2 update
+name: Deploy ShoxPosPro
 
 on:
   push:
     branches: [ main ]
 
 jobs:
-  build-and-test:
-    runs-on: ubuntu-latest
+  deploy:
+    # BU YERDA ENG MUHIM O'ZGARISH!
+    runs-on: self-hosted
     steps:
-      - name: Kodni yuklash
+      - name: Kodni serverga yuklash (Checkout)
         uses: actions/checkout@v4
 
       - name: Node.js o'rnatish
         uses: actions/setup-node@v4
         with:
-          node-version: '22.22.0'
-          cache: 'npm'
+          node-version: '22'
 
-      - name: Dependency-larni o'rnatish
-        run: npm install
+      - name: Dependency-larni yangilash
+        run: |
+          npm install --production
 
-      - name: Testlarni ishga tushirish
-        run: npm test || echo "Testlar topilmadi, davom etamiz..."
-
-  deploy:
-    needs: build-and-test
-    runs-on: ubuntu-latest
-    steps:
-      - name: SSH orqali serverga ulanish va yangilash
-        uses: appleboy/ssh-action@master
-        with:
-          host: ${{ secrets.SERVER_IP }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          script: |
-            cd ~/projects/ShoxPosProBackend
-            git pull origin main
-            npm install --production
-            pm2 restart ShoxPosProBackend
+      - name: Loyihani qayta ishga tushirish (PM2)
+        run: |
+          pm2 restart ShoxPosProBackend || pm2 start server.js --name "ShoxPosProBackend"
