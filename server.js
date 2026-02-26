@@ -69,7 +69,7 @@ app.use(helmet({
 // server.js ichidagi Socket.io qismini shunday yangilang:
 
 const io = socketIo(server, {
-  path: '/socket.io/', // ✅ Frontend bilan bir xil bo'lishi kerak
+  path: '/socket.io/', // ✅ Frontend bilan bir xil bo'lishi kerakmi?/
   cors: {
     origin: allowedOrigins,
     methods: ["GET", "POST"],
