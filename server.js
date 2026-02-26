@@ -25,26 +25,22 @@ const server = http.createServer(app);
 // ====================================
 
 const allowedOrigins = [
+  'https://shoxpospro.uz',
+  'http://shoxpospro.uz',
+  'https://www.shoxpospro.uz',
+  'http://www.shoxpospro.uz',
   'http://localhost:3000',
   'http://localhost:3001',
+  'http://localhost:5173', // Vite default porti
   'http://localhost:8081',
   'http://localhost:19006',
   'http://0.0.0.0:8081',
-  // Production manzillarini qo'shish
-  ...(process.env.NODE_ENV === 'production' 
-    ? [
-        'https://shoxpospro.uz',
-        'http://shoxpospro.uz',
-        'https://www.shoxpospro.uz',
-        'http://www.shoxpospro.uz',
-        'https://shoxpospro-6os2.onrender.com'
-      ] 
-    : [])
+  'https://shoxpospro-6os2.onrender.com'
 ];
 
 app.use(cors({
   origin: function (origin, callback) {
-    // Brauzer bo'lmagan so'rovlar (masalan, mobile yoki Postman) uchun origin null bo'ladi
+    // Brauzer bo'lmagan so'rovlar yoki ruxsat berilgan originlar
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
@@ -76,7 +72,8 @@ const io = socketIo(server, {
     methods: ["GET", "POST"],
     credentials: true
   },
-  transports: ['websocket', 'polling']
+  transports: ['websocket', 'polling'],
+  allowEIO3: true // Eski versiya klientlari bilan moslik uchun (ixtiyoriy)mi
 });
 
 // ====================================
