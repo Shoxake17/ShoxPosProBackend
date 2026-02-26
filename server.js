@@ -66,14 +66,19 @@ app.use(helmet({
 // ====================================
 // 🔌 SOCKET.IO
 // ====================================
+// server.js ichidagi Socket.io qismini shunday yangilang:
+
 const io = socketIo(server, {
+  path: '/socket.io/', // ✅ Frontend bilan bir xil bo'lishi kerak
   cors: {
     origin: allowedOrigins,
     methods: ["GET", "POST"],
     credentials: true
   },
   transports: ['websocket', 'polling'],
-  allowEIO3: true // Eski versiya klientlari bilan moslik uchun (ixtiyoriy)mi
+  allowEIO3: true,
+  pingTimeout: 60000,
+  pingInterval: 25000
 });
 
 // ====================================
