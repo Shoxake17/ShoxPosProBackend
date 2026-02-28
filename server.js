@@ -130,6 +130,7 @@ const biometricRouter = require('./routes/biometricRoutes');
 const printerRoutes = require('./routes/printerRoutes')(io);
 const authenticatorRouter = require('./routes/authenticatorRoutes');
 const adminRoutes = require('./routes/adminRoutes');
+const cashbackRoutes = require('./routes/cashback');
 
 app.use('/api', authRouter);
 app.use('/api', biometricRouter);
@@ -142,7 +143,7 @@ app.use("/api", scanProductsRouter);
 app.use('/api', debtsRoutes);
 app.use('/api', salesRoutes);
 app.use('/api/admin', adminRoutes);
-
+app.use('/api', cashbackRoutes);
 // ✅ Socket logikasi FAQAT socket.js ichida boshqariladi
 // Bu yerda io.on('connection') YO'Q — ikki marta log chiqmasin!
 initIO(io);
