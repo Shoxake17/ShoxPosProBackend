@@ -1,3 +1,4 @@
+// cashback.js fayli (to'liq yangilangan versiya)
 const express = require('express');
 const router = express.Router();
 const axios = require('axios');
@@ -17,7 +18,7 @@ router.post('/telegram-check/:login', async (req, res) => {
         const shortId = Math.floor(1000 + Math.random() * 9000).toString();
 
         try {
-            await axios.post('http://localhost:5001/api/internal/register-sale', {
+            await axios.post('http://telegram_bot:5001/api/internal/register-sale', {
                 shortId,
                 totalAmount: totalAmount || 0,
                 products: sales,

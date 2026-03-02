@@ -4,7 +4,7 @@ require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
-const { initIO, getUserSockets } = require('./socket'); // ✅ getUserSockets import
+const { initIO, getUserSockets, getSocketByDevice } = require('./socket'); // ✅ getSocketByDevice qo'shildi
 const path = require('path');
 const config = require('./config');
 const fs = require('fs');
@@ -14,6 +14,8 @@ const cookieParser = require('cookie-parser');
 const csrf = require('csurf');
 const connectDB = require('./config/db');
 const User = require('./models/User');
+const verifyToken = require('./middleware/verifyToken');                    // ✅ YANGI
+const TokenBlacklistService = require('./services/tokenBlacklistService'); // ✅ YANGI
 
 connectDB();
 
@@ -21,9 +23,8 @@ const app = express();
 const server = http.createServer(app);
 
 // ====================================
-// 🔐 CORS KONFIGURATSIYASI
+// 🔐 CORS
 // ====================================
-
 const allowedOrigins = [
   'https://shoxpospro.uz',
   'http://shoxpospro.uz',
@@ -31,7 +32,7 @@ const allowedOrigins = [
   'http://www.shoxpospro.uz',
   'http://localhost:3000',
   'http://localhost:3001',
-  'http://localhost:5173', // Vite default porti
+  'http://localhost:5173',
   'http://localhost:8081',
   'http://localhost:19006',
   'http://0.0.0.0:8081',
@@ -40,7 +41,6 @@ const allowedOrigins = [
 
 app.use(cors({
   origin: function (origin, callback) {
-    // Brauzer bo'lmagan so'rovlar yoki ruxsat berilgan originlar
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
@@ -54,7 +54,6 @@ app.use(cors({
   exposedHeaders: ['CSRF-Token']
 }));
 
-
 // ====================================
 // 🛡️ HELMET
 // ====================================
@@ -66,10 +65,8 @@ app.use(helmet({
 // ====================================
 // 🔌 SOCKET.IO
 // ====================================
-// server.js ichidagi Socket.io qismini shunday yangilang:
-
 const io = socketIo(server, {
-  path: '/socket.io/', // ✅ Frontend bilan bir xil bo'lishi kerakmi?/
+  path: '/socket.io/',
   cors: {
     origin: allowedOrigins,
     methods: ["GET", "POST"],
@@ -101,14 +98,14 @@ const csrfProtection = csrf({
 });
 
 // ====================================
-// 🔑 CSRF TOKEN ENDPOINT
+// 🔑 CSRF TOKEN
 // ====================================
 app.get('/api/csrf-token', csrfProtection, (req, res) => {
   res.json({ csrfToken: req.csrfToken() });
 });
 
 // ====================================
-// 📝 LOGGING MIDDLEWARE
+// 📝 LOGGING
 // ====================================
 app.use((req, res, next) => {
   console.log(`📨 ${req.method} ${req.path} - Origin: ${req.headers.origin || 'No origin'}`);
@@ -144,10 +141,8 @@ app.use('/api', debtsRoutes);
 app.use('/api', salesRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api', cashbackRoutes);
-// ✅ Socket logikasi FAQAT socket.js ichida boshqariladi
-// Bu yerda io.on('connection') YO'Q — ikki marta log chiqmasin!
-initIO(io);
 
+initIO(io);
 console.log("✅ Barcha routerlar ulandi");
 
 // ====================================
@@ -180,7 +175,6 @@ app.post('/api/activate-user', async (req, res) => {
     );
     if (!user) return res.status(404).json({ message: "Foydalanuvchi topilmadi!" });
 
-    // ✅ getUserSockets() orqali socket.js dan olamiz
     const socketIds = getUserSockets()[login];
     if (socketIds && socketIds.length > 0) {
       socketIds.forEach(id => io.to(id).emit('userActivated'));
@@ -205,8 +199,19 @@ app.post('/api/logout', async (req, res) => {
     if (user.desktopDeviceId === deviceId) user.desktopDeviceId = null;
     if (user.mobileDeviceId === deviceId) user.mobileDeviceId = null;
     user.active = false;
-    await user.save();
 
+    // ✅ devices array dan ham o'chirish
+    if (user.devices) {
+      const device = user.devices.find(d => d.deviceId === deviceId);
+      if (device?.token) {
+        await TokenBlacklistService.add(device.token, { login, deviceId, reason: 'logout' });
+      }
+      user.devices = user.devices.map(d =>
+        d.deviceId === deviceId ? { ...d, isActive: false, token: null } : d
+      );
+    }
+
+    await user.save();
     return res.status(200).json({ success: true, message: 'Logout muvaffaqiyatli!' });
   } catch (err) {
     console.error('❌ Logout xatosi:', err);
@@ -226,7 +231,6 @@ app.post('/api/block-user', async (req, res) => {
     );
     if (!user) return res.status(404).json({ message: "Foydalanuvchi topilmadi!" });
 
-    // ✅ getUserSockets() + login yuboramiz — client tomonda kim ekanini bilsin
     const socketIds = getUserSockets()[login];
     if (socketIds && socketIds.length > 0) {
       socketIds.forEach(id => {
@@ -292,7 +296,6 @@ app.post("/api/confirm-login", async (req, res) => {
     user.active = true;
     await user.save();
 
-    // ✅ Eski qurilmalarga xabar — getUserSockets() orqali
     oldDeviceIds.forEach(() => {
       const socketIds = getUserSockets()[login] || [];
       socketIds.forEach(sid => {
@@ -308,7 +311,110 @@ app.post("/api/confirm-login", async (req, res) => {
 });
 
 // ====================================
-// 🌐 CATCH-ALL ROUTE (SPA uchun)
+// ✅ YANGI: FOYDALANUVCHI QURILMALARI
+// ====================================
+app.get('/api/user-devices', verifyToken, async (req, res) => {
+  const login = req.user.login;
+  try {
+    const user = await User.findOne({ login }).select('devices');
+    if (!user) return res.status(404).json({ message: 'Foydalanuvchi topilmadi' });
+
+    // Tokenni yubormaslik — faqat kerakli fieldlar
+    const devices = (user.devices || []).map(d => ({
+      deviceId: d.deviceId,
+      deviceType: d.deviceType,
+      deviceOS: d.deviceOS,
+      isActive: d.isActive,
+      lastLogin: d.lastLogin
+    }));
+
+    res.json({ devices });
+  } catch (err) {
+    console.error('❌ user-devices xatosi:', err);
+    res.status(500).json({ message: 'Server xatosi' });
+  }
+});
+
+// ====================================
+// ✅ YANGI: QURILMANI TIZIMDAN CHIQARISH
+// ====================================
+app.post('/api/kick-device', verifyToken, csrfProtection, async (req, res) => {
+  const { deviceId } = req.body;
+  const login = req.user.login;
+
+  if (!deviceId) {
+    return res.status(400).json({ message: 'deviceId kerak' });
+  }
+
+  // O'z qurilmasini kick qilishga yo'l qo'ymaymiz
+  const currentDeviceId = req.user.deviceId || req.cookies?.deviceId;
+  if (currentDeviceId && currentDeviceId === deviceId) {
+    return res.status(400).json({ message: 'O\'z qurilmangizni chiqarib yuborib bo\'lmaydi' });
+  }
+
+  try {
+    const user = await User.findOne({ login });
+    if (!user) return res.status(404).json({ message: 'Foydalanuvchi topilmadi' });
+
+    // ✅ 1: Qurilmaning tokenini topib blacklistga qo'shish
+    const deviceSession = (user.devices || []).find(d => d.deviceId === deviceId);
+    if (deviceSession?.token) {
+      await TokenBlacklistService.add(deviceSession.token, {
+        login,
+        deviceId,
+        reason: 'kicked'
+      });
+      console.log(`⛔ Token blacklistga qo'shildi: ${login} | ${deviceId}`);
+    }
+
+    // ✅ 2: FAQAT o'sha qurilmaning socketiga forceLogout yuborish
+    const targetSockets = getSocketByDevice(login, deviceId);
+    console.log(`🎯 Kick: ${login} | deviceId: ${deviceId} | socketlar soni: ${targetSockets.length}`);
+
+    if (targetSockets.length > 0) {
+      targetSockets.forEach(socketId => {
+        io.to(socketId).emit('forceLogout', {
+          reason: 'Boshqa qurilma tomonidan tizimdan chiqarildingiz'
+        });
+        console.log(`⛔ forceLogout yuborildi → socketId: ${socketId}`);
+      });
+    } else {
+      // ✅ Fallback: Socket topilmasa ham DB yangilanadi
+      // Qurilma keyingi so'rovda 401 oladi (verifyToken → blacklist tekshiradi)
+      console.warn(`⚠️ Socket topilmadi, lekin DB yangilanadi: ${login} | ${deviceId}`);
+    }
+
+    // ✅ 3: DB da qurilmani isActive = false qilish
+    await User.updateOne(
+      { login, 'devices.deviceId': deviceId },
+      {
+        $set: {
+          'devices.$.isActive': false,
+          'devices.$.token': null,
+          'devices.$.kickedAt': new Date()
+        }
+      }
+    );
+
+    // ✅ 4: Eski desktopDeviceId / mobileDeviceId ni ham tozalash
+    if (user.desktopDeviceId === deviceId) {
+      await User.updateOne({ login }, { $set: { desktopDeviceId: null } });
+    }
+    if (user.mobileDeviceId === deviceId) {
+      await User.updateOne({ login }, { $set: { mobileDeviceId: null } });
+    }
+
+    console.log(`✅ Qurilma chiqarildi: ${login} | ${deviceId}`);
+    res.json({ success: true, message: 'Qurilma tizimdan chiqarildi' });
+
+  } catch (err) {
+    console.error('❌ Kick device xatosi:', err);
+    res.status(500).json({ message: 'Server xatosi' });
+  }
+});
+
+// ====================================
+// 🌐 CATCH-ALL (SPA)
 // ====================================
 app.get('*', (req, res, next) => {
   if (req.path.startsWith('/api')) return next();
@@ -346,19 +452,15 @@ app.use((err, req, res, next) => {
 });
 
 // ====================================
-// 🚀 SERVER LAUNCH
+// 🚀 SERVER
 // ====================================
 const PORT = config.PORT || 3000;
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`
-
 ✅ SERVER ISHGA TUSHDI
-
 🌐 Port: ${PORT}
-
 🔧 Muhit: ${config.NODE_ENV}
-
 🔌 Socket.IO: Faol
   `);
 });
@@ -367,7 +469,8 @@ process.on('SIGTERM', () => {
   console.log("👋 SIGTERM signal, server to'xtatilmoqda...");
   server.close(() => {
     console.log('✅ Server yopildi');
-    process.exit(0);  });
+    process.exit(0);
+  });
 });
 
 module.exports = { io, server };
