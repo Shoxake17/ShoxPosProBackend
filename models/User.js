@@ -1,3 +1,4 @@
+// models/User.js
 const mongoose = require('mongoose');
 const bcrypt = require('bcrypt');
 
@@ -24,7 +25,6 @@ const userSchema = new mongoose.Schema({
     default: false 
   },
 
-  // Qo'shimcha ma'lumotlar
   email: { 
     type: String, 
     unique: true, 
@@ -34,43 +34,43 @@ const userSchema = new mongoose.Schema({
     type: String 
   },
 
-  // Qurilma ma'lumotlari (hozirgi faol qurilma)
+  // Hozirgi faol qurilma
   activeDevice: {
-    deviceId: { type: String, default: null },
+    deviceId:   { type: String, default: null },
     deviceType: { type: String, default: "unknown" },
-    deviceOS: { type: String, default: "unknown" },
-    lastLogin: { type: Date }
+    deviceOS:   { type: String, default: "unknown" },
+    lastLogin:  { type: Date }
   },
 
   // Qurilmalar ro'yxati
   devices: [{
-    deviceId: { type: String, required: true },
+    deviceId:   { type: String, required: true },
     deviceType: { type: String, required: true }, 
-    deviceOS: { type: String, required: true },
-    isActive: { type: Boolean, default: true },
-    lastLogin: { type: Date, default: Date.now },
+    deviceOS:   { type: String, required: true },
+    isActive:   { type: Boolean, default: true },
+    lastLogin:  { type: Date, default: Date.now },
     isSuspicious: { type: Boolean, default: false },
-    isTrusted: { type: Boolean, default: false },
-    
+    isTrusted:  { type: Boolean, default: false },
+
+    // ✅ YANGI — kick-device va blacklist uchun
+    token:    { type: String, default: null },  // JWT token saqlanadi
+    kickedAt: { type: Date, default: null },    // Qachon chiqarilgani
+
     biometric: {
-      enabled: { type: Boolean, default: false },
+      enabled:      { type: Boolean, default: false },
       credentialId: { type: String },
-      publicKey: { type: String }, // WebAuthn public key
-      counter: { type: Number, default: 0 }, // Replay attack oldini olish uchun
-      enabledAt: { type: Date }
+      publicKey:    { type: String },
+      counter:      { type: Number, default: 0 },
+      enabledAt:    { type: Date }
     }
   }],
 
-  // Bloklanganmi?
   blocked: { 
     type: Boolean, 
     default: false 
   },
 
-
-
-  //  Authenticator
-googleAuthSecret: { 
+  googleAuthSecret: { 
     type: String, 
     default: null 
   },
@@ -78,7 +78,7 @@ googleAuthSecret: {
     type: Boolean, 
     default: false 
   },
-  // Noto'g'ri kirish urinishlari
+
   loginAttempts: { 
     type: Number, 
     default: 0 
@@ -95,7 +95,6 @@ googleAuthSecret: {
 // Parolni hashlash
 userSchema.pre('save', async function (next) {
   if (!this.isModified('password')) return next();
-  
   try {
     const salt = await bcrypt.genSalt(10);
     this.password = await bcrypt.hash(this.password, salt);

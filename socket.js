@@ -1,31 +1,48 @@
+// socket.js
 
 let io;
 let activeUsers = []; // [{ login, deviceId, deviceType, deviceOS, lastActive, active }]
-const userSockets = {}; // { login: [socketId, ...] }
+const userSockets = {}; // { login: [{ socketId, deviceId }] }
 
-/**
- * Socket.io ni ishga tushirish
- * @param {Server} socketIO
- */
+// ====================================
+// 🔧 ICHKI YORDAMCHI
+// ====================================
+function _registerSocket(socketId, login, deviceId = null) {
+  if (!login) return;
+  if (!userSockets[login]) userSockets[login] = [];
+
+  // Bir xil socketId ikki marta qo'shilmasin
+  const exists = userSockets[login].some(s => s.socketId === socketId);
+  if (!exists) {
+    userSockets[login].push({ socketId, deviceId });
+  }
+}
+
+// ====================================
+// 🚀 ASOSIY INIT
+// ====================================
 function initIO(socketIO) {
   io = socketIO;
 
   io.on('connection', (socket) => {
     console.log(`🔌 Yangi socket ulandi: ${socket.id}`);
 
-    // 📌 Foydalanuvchini ro'yxatga olish
-    socket.on('registerUser', ({ login }) => {
+    // ✅ Handshake auth dan oldindan login/deviceId olish (ixtiyoriy)
+    const authLogin = socket.handshake.auth?.login;
+    const authDeviceId = socket.handshake.auth?.deviceId;
+    if (authLogin) {
+      _registerSocket(socket.id, authLogin, authDeviceId);
+      console.log(`📲 ${authLogin} handshake orqali ro'yxatga olindi`);
+    }
+
+    // ✅ registerUser event — deviceId ham qabul qilinadi
+    socket.on('registerUser', ({ login, deviceId }) => {
       if (!login) return;
-
-      if (!userSockets[login]) userSockets[login] = [];
-      if (!userSockets[login].includes(socket.id)) {
-        userSockets[login].push(socket.id);
-      }
-
-      console.log(`📲 ${login} socket ro'yxatga olindi: ${socket.id}`);
+      _registerSocket(socket.id, login, deviceId || null);
+      console.log(`📲 ${login} | deviceId: ${deviceId} | socket: ${socket.id}`);
     });
 
-    // 📌 Foydalanuvchi tizimga kirganida
+    // ✅ Foydalanuvchi tizimga kirganida
     socket.on('userLogged', (user) => {
       if (!user || !user.login || !user.deviceId) return;
 
@@ -48,13 +65,15 @@ function initIO(socketIO) {
       io.emit('userLogged', updatedUser);
     });
 
-    // 📌 Socket uzilganda
+    // ✅ Socket uzilganda
     socket.on('disconnect', () => {
       console.log(`❌ Socket uzildi: ${socket.id}`);
 
-      // userSockets dan o'chirish
+      // ✅ TO'G'RILANDI: object array ni to'g'ri filter qilish
       for (const login in userSockets) {
-        userSockets[login] = userSockets[login].filter(id => id !== socket.id);
+        userSockets[login] = userSockets[login].filter(
+          s => s.socketId !== socket.id  // ← s.socketId, s emas!
+        );
         if (userSockets[login].length === 0) {
           delete userSockets[login];
         }
@@ -73,33 +92,47 @@ function initIO(socketIO) {
   });
 }
 
-/**
- * Socket.io instance qaytaradi
- */
-function getIO() {
-  if (!io) {
-    throw new Error('Socket.io hali ishga tushirilmagan!');
+// ====================================
+// 📡 Login bo'yicha barcha socketId lar
+// ✅ Eski server.js kodi bilan TO'LIQ MOS
+// ====================================
+function getUserSockets() {
+  const result = {};
+  for (const login in userSockets) {
+    result[login] = userSockets[login].map(s => s.socketId);
   }
+  return result;
+}
+
+// ====================================
+// 🎯 DeviceId bo'yicha socketId lar — KICK uchun
+// ====================================
+function getSocketByDevice(login, deviceId) {
+  const sockets = userSockets[login] || [];
+  return sockets
+    .filter(s => s.deviceId === deviceId)
+    .map(s => s.socketId);
+}
+
+// ====================================
+// 🔌 IO instance
+// ====================================
+function getIO() {
+  if (!io) throw new Error('Socket.io hali ishga tushirilmagan!');
   return io;
 }
 
-/**
- * Faol foydalanuvchilar ro'yxatini qaytaradi
- */
+// ====================================
+// 👥 Faol foydalanuvchilar
+// ====================================
 function getActiveUsers() {
   return activeUsers;
-}
-
-/**
- * Foydalanuvchi socketlarini qaytaradi
- */
-function getUserSockets() {
-  return userSockets;
 }
 
 module.exports = {
   initIO,
   getIO,
   getActiveUsers,
-  getUserSockets
+  getUserSockets,
+  getSocketByDevice  // ✅ YANGI — server.js kick-device uchun
 };

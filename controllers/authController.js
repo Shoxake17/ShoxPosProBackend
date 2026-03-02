@@ -1,26 +1,20 @@
 // controllers/authController.js
 
-// 📦 Importlar
 const User = require('../models/User');
 const UserSession = require('../models/UserSession');
 const AuditService = require('../services/auditService');
 const UserSessionService = require('../services/userSessionService');
+const TokenBlacklistService = require('../services/tokenBlacklistService'); // ✅ YANGI
 
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const speakeasy = require('speakeasy'); // ← Google Authenticator uchun qo'shildi
+const speakeasy = require('speakeasy');
 const { v4: uuidv4 } = require('uuid');
 const config = require('../config');
-// ====================================================================
-// 🔑 TOKEN GENERATOR - BIOMETRIK UCHUN HAM ISHLAYDI
-// ====================================================================
 
-/**
- * Access va Refresh tokenlarni yaratadi
- * @param {Object} user - User model obyekti
- * @param {String} deviceId - Qurilma ID
- * @returns {Object} { accessToken, refreshToken, refreshTokenId }
- */
+// ====================================================================
+// 🔑 TOKEN GENERATOR
+// ====================================================================
 function createTokens(user, deviceId = null) {
   const payload = {
     id: user._id.toString(),
@@ -55,78 +49,8 @@ exports.generateTokens = async (user, deviceId = null) => {
 };
 
 // ====================================================================
-// 🔐 ODDIY KIRISH - LOGIN VA PAROL BILAN
+// 🔐 LOGIN
 // ====================================================================
-
-/**
- * Oddiy kirishni davom ettirish - tokenlar yaratish va sessiya ochish
- */
-async function proceedWithLogin(user, deviceId, deviceType, deviceOS, req, res) {
-  // Faol qurilmani yangilash
-  user.activeDevice = {
-    deviceId,
-    deviceType: deviceType || 'unknown',
-    deviceOS: deviceOS || 'unknown',
-    lastLogin: new Date()
-  };
-  await user.save();
-
-  // Tokenlar yaratish
-  const { accessToken, refreshToken, refreshTokenId } = createTokens(user, deviceId);
-
-  // Cookie sozlamalari
-  const cookieOptions = {
-    httpOnly: true,
-    secure: config.NODE_ENV === 'production',
-    sameSite: 'strict',
-    path: '/'
-  };
-
-  res.cookie('accessToken', accessToken, {
-    ...cookieOptions,
-    maxAge: 15 * 60 * 1000 // 15 daqiqa
-  });
-
-  res.cookie('refreshToken', refreshToken, {
-    ...cookieOptions,
-    maxAge: 7 * 24 * 60 * 60 * 1000 // 7 kun
-  });
-
-  // Sessiya yaratish
-  await UserSessionService.createSession({
-    userId: user._id,
-    deviceId,
-    ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress,
-    userAgent: req.headers['user-agent'],
-    refreshTokens: [{
-      tokenId: refreshTokenId,
-      token: refreshToken,
-      deviceId,
-      createdAt: new Date()
-    }]
-  });
-
-  // Audit log
-  await AuditService.logUserAction({ 
-    login: user.login, 
-    action: 'LOGIN', 
-    status: 'SUCCESS' 
-  });
-
-  res.json({
-    success: true,
-    message: 'Kirish muvaffaqiyatli',
-    user: { 
-      login: user.login, 
-      role: user.role,
-      name: user.name || null
-    }
-  });
-}
-
-/**
- * LOGIN - Oddiy kirish (login + parol)
- */
 exports.login = async (req, res) => {
   const { 
     login, 
@@ -144,57 +68,41 @@ exports.login = async (req, res) => {
   try {
     const normalizedLogin = (login || "").trim().toLowerCase();
 
-   
-
-    // MUHIM: password ni majburan olish uchun +password qo'shamiz
-    const user = await User.findOne({ login: normalizedLogin })
-      .select('+password');  // ← BU QATOR MUHIM – XATONI HAL QILADI
+    const user = await User.findOne({ login: normalizedLogin }).select('+password');
 
     if (!user) {
-      console.warn(`❌ User topilmadi: ${normalizedLogin}`);
       return res.status(404).json({ message: "Foydalanuvchi topilmadi" });
     }
 
     if (user.isDeleted) {
-      console.warn(`❌ User o'chirilgan: ${normalizedLogin}`);
       return res.status(403).json({ message: "Hisob o'chirilgan" });
     }
 
     // Bloklangan qurilma tekshiruvi
     const blockedDevice = user.blockedDevices?.find(d => d.deviceId === deviceId);
     if (blockedDevice && new Date() < new Date(blockedDevice.lockUntil)) {
-      console.warn(`❌ Qurilma bloklangan: ${deviceId}`);
       return res.status(403).json({
         message: "Qurilma bloklangan. 30 minutdan keyin urinib ko'ring."
       });
     }
 
-  
-   
-    // Agar password fieldi hali ham undefined bo'lsa – xavfsizlik uchun tekshirish
     if (!user.password) {
-      console.error(`❌ Password fieldi mavjud emas: ${normalizedLogin}`);
       return res.status(500).json({ message: "Server xatosi: foydalanuvchi ma'lumotlari buzilgan" });
     }
 
     const isMatch = await bcrypt.compare(password, user.password);
 
-   
-
     if (!isMatch) {
-      console.warn(`❌ Parol noto'g'ri: ${normalizedLogin}`);
-
       user.loginAttempts = (user.loginAttempts || 0) + 1;
 
       if (user.loginAttempts >= 5) {
         user.blockedDevices = user.blockedDevices || [];
         user.blockedDevices.push({
           deviceId,
-          lockUntil: new Date(Date.now() + 30 * 60 * 1000) // 30 daqiqa
+          lockUntil: new Date(Date.now() + 30 * 60 * 1000)
         });
         user.loginAttempts = 0;
         await user.save();
-
         return res.status(403).json({
           message: "5 ta noto'g'ri urinish. Qurilma 30 minut bloklandi."
         });
@@ -204,10 +112,7 @@ exports.login = async (req, res) => {
       return res.status(401).json({ message: "Parol noto'g'ri" });
     }
 
-
-    // ========================================
-    // GOOGLE AUTHENTICATOR TEKSHIRUVI
-    // ========================================
+    // Google Authenticator tekshiruvi
     if (user.googleAuthEnabled) {
       if (!googleAuthCode) {
         return res.status(200).json({
@@ -225,7 +130,6 @@ exports.login = async (req, res) => {
 
       if (!verified) {
         user.loginAttempts = (user.loginAttempts || 0) + 1;
-
         if (user.loginAttempts >= 5) {
           user.blockedDevices = user.blockedDevices || [];
           user.blockedDevices.push({
@@ -234,42 +138,51 @@ exports.login = async (req, res) => {
           });
           user.loginAttempts = 0;
           await user.save();
-
           return res.status(403).json({
             message: "5 ta noto'g'ri Google Auth urinish. Qurilma 30 minut bloklandi."
           });
         }
-
         await user.save();
-        return res.status(400).json({ 
-          message: "Google Authenticator kodi noto'g'ri" 
-        });
+        return res.status(400).json({ message: "Google Authenticator kodi noto'g'ri" });
       }
     }
 
-    // Muvaffaqiyatli login → attempts ni reset qilish
+    // Muvaffaqiyatli login
     user.loginAttempts = 0;
 
-    // Qurilma ma'lumotlarini yangilash
-    const deviceInfo = {
-      deviceId,
-      deviceType: deviceType || "unknown",
-      deviceOS: deviceOS || "unknown",
-      lastLogin: new Date(),
-      isActive: true,
-      isSuspicious: false,
-      isTrusted: false
-    };
+    // Token yaratish
+    const { accessToken, refreshToken, refreshTokenId } = createTokens(user, deviceId);
 
-    if (!user.devices?.some(d => d.deviceId === deviceId)) {
-      user.devices = user.devices || [];
-      user.devices.push(deviceInfo);
-    } else {
+    // ✅ devices arrayni yangilash — TOKEN SAQLASH
+    const deviceExists = user.devices?.some(d => d.deviceId === deviceId);
+
+    if (deviceExists) {
+      // Mavjud qurilmani yangilash
       user.devices = user.devices.map(d =>
         d.deviceId === deviceId
-          ? { ...d, lastLogin: new Date(), isActive: true }
-          : { ...d, isActive: false }
+          ? { 
+              ...d.toObject(), 
+              lastLogin: new Date(), 
+              isActive: true,
+              token: accessToken,  // ✅ TOKEN SAQLANDI
+              kickedAt: null
+            }
+          : { ...d.toObject(), isActive: false }
       );
+    } else {
+      // Yangi qurilma qo'shish
+      user.devices = user.devices || [];
+      user.devices.push({
+        deviceId,
+        deviceType: deviceType || "unknown",
+        deviceOS: deviceOS || "unknown",
+        lastLogin: new Date(),
+        isActive: true,
+        token: accessToken,  // ✅ TOKEN SAQLANDI
+        kickedAt: null,
+        isSuspicious: false,
+        isTrusted: false
+      });
     }
 
     user.activeDevice = {
@@ -281,10 +194,7 @@ exports.login = async (req, res) => {
 
     await user.save();
 
-
-    // Token yaratish va cookie'larga yozish
-    const { accessToken, refreshToken, refreshTokenId } = createTokens(user, deviceId);
-
+    // Cookie sozlamalari
     const cookieOptions = {
       httpOnly: true,
       secure: config.NODE_ENV === 'production',
@@ -294,12 +204,12 @@ exports.login = async (req, res) => {
 
     res.cookie('accessToken', accessToken, {
       ...cookieOptions,
-      maxAge: 15 * 60 * 1000  // 15 daqiqa
+      maxAge: 15 * 60 * 1000
     });
 
     res.cookie('refreshToken', refreshToken, {
       ...cookieOptions,
-      maxAge: 7 * 24 * 60 * 60 * 1000  // 7 kun
+      maxAge: 7 * 24 * 60 * 60 * 1000
     });
 
     // Sessiya yaratish
@@ -316,7 +226,6 @@ exports.login = async (req, res) => {
       }]
     });
 
-    // Audit log
     await AuditService.logUserAction({ 
       login: user.login, 
       action: 'LOGIN', 
@@ -345,7 +254,6 @@ exports.login = async (req, res) => {
 // ====================================================================
 // 🔁 TOKEN REFRESH
 // ====================================================================
-
 exports.refresh = async (req, res) => {
   const refreshToken = req.cookies.refreshToken;
 
@@ -370,10 +278,14 @@ exports.refresh = async (req, res) => {
       return res.status(403).json({ message: 'Token noto\'g\'ri' });
     }
 
-    // ✅ AVVAL yangi tokenlarni yaratamiz
     const { accessToken, refreshToken: newRefreshToken, refreshTokenId } = createTokens(user, decoded.deviceId);
 
-    // ✅ KEYIN eski sessiyani o'chiramiz (atomik operatsiya)
+    // ✅ Yangi accessToken ni devices[] ga ham saqlash
+    await User.updateOne(
+      { login: user.login, 'devices.deviceId': decoded.deviceId },
+      { $set: { 'devices.$.token': accessToken } }
+    );
+
     await UserSessionService.rotateRefreshToken({
       userId: user._id,
       deviceId: decoded.deviceId,
@@ -386,7 +298,6 @@ exports.refresh = async (req, res) => {
       }
     });
 
-    // Cookie'larga yozish
     const cookieOptions = {
       httpOnly: true,
       secure: config.NODE_ENV === 'production',
@@ -412,63 +323,145 @@ exports.refresh = async (req, res) => {
 };
 
 // ====================================================================
-// 👤 FOYDALANUVCHI BOSHQARUVI
+// 💻 QURILMALAR BOSHQARUVI
 // ====================================================================
 
 /**
- * Parolni o'zgartirish
+ * Foydalanuvchi qurilmalarini olish
  */
+exports.getUserDevices = async (req, res) => {
+  try {
+    const user = await User.findOne({ login: req.user.login }).select('devices');
+    if (!user) return res.status(404).json({ message: "Foydalanuvchi topilmadi" });
+
+    // ✅ Token va maxfiy fieldlarni yubormaslik
+    const devices = (user.devices || []).map(d => ({
+      deviceId:     d.deviceId,
+      deviceType:   d.deviceType,
+      deviceOS:     d.deviceOS,
+      isActive:     d.isActive,
+      lastLogin:    d.lastLogin,
+      isTrusted:    d.isTrusted,
+      isSuspicious: d.isSuspicious
+    }));
+
+    res.json({ success: true, devices });
+  } catch (err) {
+    console.error('❌ getUserDevices xatosi:', err);
+    res.status(500).json({ message: "Server xatosi" });
+  }
+};
+
 /**
- * Parolni o'zgartirish - FIXED VERSION
+ * Qurilmani tizimdan chiqarish
  */
+exports.kickDevice = async (req, res) => {
+  const { deviceId } = req.body;
+  const login = req.user.login;
+
+  if (!deviceId) {
+    return res.status(400).json({ message: 'deviceId kerak' });
+  }
+
+  // ✅ O'z qurilmasini kick qilishga yo'l qo'ymaslik
+  if (req.user.deviceId && req.user.deviceId === deviceId) {
+    return res.status(400).json({ 
+      message: "O'z qurilmangizni chiqarib yuborib bo'lmaydi" 
+    });
+  }
+
+  try {
+    const user = await User.findOne({ login });
+    if (!user) {
+      return res.status(404).json({ message: "Foydalanuvchi topilmadi" });
+    }
+
+    // ✅ 1: Qurilmaning tokenini topib blacklistga qo'shish
+    const deviceSession = (user.devices || []).find(d => d.deviceId === deviceId);
+
+    if (deviceSession?.token) {
+      await TokenBlacklistService.add(deviceSession.token, {
+        login,
+        deviceId,
+        reason: 'kicked'
+      });
+      console.log(`⛔ Token blacklistga qo'shildi: ${login} | ${deviceId}`);
+    } else {
+      console.warn(`⚠️ Token topilmadi — qurilma offline yoki token yo'q: ${deviceId}`);
+    }
+
+    // ✅ 2: getSocketByDevice orqali FAQAT o'sha qurilmaga forceLogout yuborish
+    const { io } = require('../server');
+    const { getSocketByDevice } = require('../socket');
+
+    const targetSockets = getSocketByDevice(login, deviceId);
+    console.log(`🎯 Kick: ${login} | ${deviceId} | socketlar: ${targetSockets.length}`);
+
+    if (targetSockets.length > 0) {
+      targetSockets.forEach(socketId => {
+        io.to(socketId).emit('forceLogout', {  // ✅ 'forceLogout' — main.tsx bilan mos
+          reason: 'Boshqa qurilma tomonidan tizimdan chiqarildingiz'
+        });
+        console.log(`⛔ forceLogout yuborildi → ${socketId}`);
+      });
+    } else {
+      console.warn(`⚠️ Socket topilmadi — qurilma offline bo'lishi mumkin`);
+      // Fallback: qurilma keyingi so'rovda verifyToken → blacklist → 401 oladi
+    }
+
+    // ✅ 3: DB yangilash
+    await User.updateOne(
+      { login, 'devices.deviceId': deviceId },
+      {
+        $set: {
+          'devices.$.isActive': false,
+          'devices.$.token':    null,
+          'devices.$.kickedAt': new Date()
+        }
+      }
+    );
+
+    // ✅ 4: activeDevice ni tozalash
+    if (user.activeDevice?.deviceId === deviceId) {
+      await User.updateOne({ login }, { $set: { activeDevice: null } });
+    }
+
+    console.log(`✅ Qurilma chiqarildi: ${login} | ${deviceId}`);
+    res.json({ success: true, message: "Qurilma muvaffaqiyatli chiqarildi" });
+
+  } catch (err) {
+    console.error("❌ kickDevice xatosi:", err);
+    return res.status(500).json({ message: "Server xatosi" });
+  }
+};
+
+// ====================================================================
+// 👤 FOYDALANUVCHI BOSHQARUVI
+// ====================================================================
+
 exports.changePassword = async (req, res) => {
   const { login, currentPassword, newPassword } = req.body;
 
   try {
     const normalizedLogin = (login || '').trim().toLowerCase();
+    const user = await User.findOne({ login: normalizedLogin }).select('+password');
 
-    // MUHIM QATOR: password ni majburan olish
-    const user = await User.findOne({ login: normalizedLogin })
-      .select('+password');   // ← BU QATOR XATONI HAL QILADI
-
-    if (!user) {
-      return res.status(404).json({ message: 'Foydalanuvchi topilmadi' });
-    }
-
-    // Endi user.password mavjud bo'ladi
-    if (!user.password) {
-      console.error(`❌ Password fieldi mavjud emas: ${normalizedLogin}`);
-      return res.status(500).json({ message: 'Server xatosi: parol maʼlumotlari topilmadi' });
-    }
+    if (!user) return res.status(404).json({ message: 'Foydalanuvchi topilmadi' });
+    if (!user.password) return res.status(500).json({ message: 'Server xatosi: parol topilmadi' });
 
     const isMatch = await bcrypt.compare(currentPassword, user.password);
-    if (!isMatch) {
-      return res.status(401).json({ message: "Joriy parol noto'g'ri" });
-    }
+    if (!isMatch) return res.status(401).json({ message: "Joriy parol noto'g'ri" });
 
-    // Yangi parolni oddiy matn sifatida o'rnatamiz (hook o'zi hash qiladi)
     user.password = newPassword;
-
     await user.save();
 
-    // Test uchun saqlangan hashni ko'rish
-    const fresh = await User.findById(user._id).select('+password');
-
-    return res.json({
-      success: true,
-      message: "Parol muvaffaqiyatli o'zgartirildi"
-    });
-
+    return res.json({ success: true, message: "Parol muvaffaqiyatli o'zgartirildi" });
   } catch (err) {
     console.error('changePassword xatosi:', err.stack || err);
     return res.status(500).json({ message: 'Server xatosi yuz berdi' });
   }
 };
 
-
-/**
- * Ro'yxatdan o'tish
- */
 exports.register = async (req, res) => {
   const { login, password, role = 'seller' } = req.body;
 
@@ -477,25 +470,18 @@ exports.register = async (req, res) => {
   }
 
   if (!['seller', 'admin', 'cashier'].includes(role)) {
-    return res.status(400).json({ message: 'Noto\'g\'ri role: faqat seller, cashier yoki admin' });
+    return res.status(400).json({ message: "Noto'g'ri role" });
   }
 
   try {
     const normalizedLogin = login.trim().toLowerCase();
-
     const existingUser = await User.findOne({ login: normalizedLogin });
-    if (existingUser) {
-      return res.status(409).json({ message: 'Bu login allaqachon mavjud' });
-    }
+    if (existingUser) return res.status(409).json({ message: 'Bu login allaqachon mavjud' });
 
     const newUser = new User({ login: normalizedLogin, password, role });
     await newUser.save();
 
-    await AuditService.logUserAction({ 
-      login: normalizedLogin, 
-      action: 'REGISTER', 
-      status: 'SUCCESS' 
-    });
+    await AuditService.logUserAction({ login: normalizedLogin, action: 'REGISTER', status: 'SUCCESS' });
 
     res.status(201).json({
       message: '✅ Foydalanuvchi yaratildi',
@@ -507,10 +493,6 @@ exports.register = async (req, res) => {
   }
 };
 
-
-/**
- * Qurilmani tasdiqlash
- */
 exports.confirmLogin = async (req, res) => {
   const { login, deviceId, deviceType = 'unknown', deviceOS = 'unknown', confirm } = req.body;
 
@@ -520,7 +502,6 @@ exports.confirmLogin = async (req, res) => {
     if (!user) return res.status(404).json({ message: 'Foydalanuvchi topilmadi' });
 
     if (confirm) {
-      // Eski sessiyani deactivate qilish
       if (user.activeDevice && user.activeDevice.deviceId) {
         await UserSession.updateOne(
           { userId: user._id, deviceId: user.activeDevice.deviceId, isActive: true },
@@ -528,33 +509,14 @@ exports.confirmLogin = async (req, res) => {
         );
       }
 
-      // Yangi qurilma ma'lumotlarini saqlash
-      user.activeDevice = {
-        deviceId,
-        deviceType,
-        deviceOS,
-        lastLogin: new Date()
-      };
+      user.activeDevice = { deviceId, deviceType, deviceOS, lastLogin: new Date() };
       await user.save();
 
-      await AuditService.logUserAction({ 
-        login: normalizedLogin, 
-        action: 'CONFIRM_DEVICE', 
-        status: 'SUCCESS' 
-      });
-
-     
-
-      return res.json({ 
-        message: 'Yangi qurilmaga o\'tkazildi, eski qurilmadan chiqildi' 
-      });
+      await AuditService.logUserAction({ login: normalizedLogin, action: 'CONFIRM_DEVICE', status: 'SUCCESS' });
+      return res.json({ message: "Yangi qurilmaga o'tkazildi" });
     }
 
-    await AuditService.logUserAction({ 
-      login: normalizedLogin, 
-      action: 'CONFIRM_DEVICE', 
-      status: 'DECLINED' 
-    });
+    await AuditService.logUserAction({ login: normalizedLogin, action: 'CONFIRM_DEVICE', status: 'DECLINED' });
     return res.json({ message: 'Kirish rad etildi' });
   } catch (err) {
     console.error('❌ Confirm xatosi:', err);
@@ -562,69 +524,7 @@ exports.confirmLogin = async (req, res) => {
   }
 };
 
-/**
- * Foydalanuvchi qurilmalarini olish
- */
-exports.getUserDevices = async (req, res) => {
-  try {
-    const user = await User.findOne({ login: req.user.login });
-    if (!user) return res.status(404).json({ message: "Foydalanuvchi topilmadi" });
-
-    const activeDevices = user.devices?.filter(d => d.isActive) || [];
-
-    res.json({ devices: activeDevices });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Server xatosi" });
-  }
-};
-
-/**
- * Qurilmani chiqarib yuborish
- */
-exports.kickDevice = async (req, res) => {
-  const { deviceId } = req.body;
-  const login = req.user.login;
-
-  try {
-    const user = await User.findOne({ login });
-    if (!user) {
-      return res.status(404).json({ message: "Foydalanuvchi topilmadi" });
-    }
-
-    const initialLength = user.devices.length;
-    user.devices = user.devices.filter(d => d.deviceId !== deviceId);
-
-    if (user.devices.length === 0) {
-      user.devices = [];
-    }
-
-    if (user.activeDevice?.deviceId === deviceId) {
-      user.activeDevice = null;
-    }
-
-    await user.save();
-
-    if (user.devices.length === initialLength - 1 || initialLength === 0) {
-      const { io } = require('../server');
-      io.to(deviceId).emit('force-logout');
-      console.log(`✅ Qurilma o'chirildi: ${deviceId}`);
-
-      return res.json({ message: "Qurilma muvaffaqiyatli o'chirildi" });
-    } else {
-      return res.status(404).json({ message: "Qurilma topilmadi" });
-    }
-  } catch (err) {
-    console.error("❌ Kick device xatosi:", err);
-    return res.status(500).json({ message: "Server xatosi" });
-  }
-};
-
-/**
- * Logout
- */
 exports.logout = async (req, res) => {
-  // Body’dan emas, cookie va req.user’dan olish mumkin, lekin hozirgi logika saqlaymiz
   const { userId, deviceId } = req.body;
 
   try {
@@ -636,21 +536,33 @@ exports.logout = async (req, res) => {
     }
 
     const user = await User.findById(userId);
-    if (user && user.activeDevice?.deviceId === deviceId) {
-      user.activeDevice = null;
-      await user.save();
+    if (user) {
+      // ✅ Logout paytida ham token blacklistga
+      const deviceSession = (user.devices || []).find(d => d.deviceId === deviceId);
+      if (deviceSession?.token) {
+        await TokenBlacklistService.add(deviceSession.token, {
+          login: user.login,
+          deviceId,
+          reason: 'logout'
+        });
+      }
+
+      // devices da isActive = false
+      await User.updateOne(
+        { _id: userId, 'devices.deviceId': deviceId },
+        { $set: { 'devices.$.isActive': false, 'devices.$.token': null } }
+      );
+
+      if (user.activeDevice?.deviceId === deviceId) {
+        user.activeDevice = null;
+        await user.save();
+      }
+
+      await AuditService.logUserAction({ login: user.login, action: 'LOGOUT', status: 'SUCCESS' });
     }
 
-    await AuditService.logUserAction({ 
-      login: user?.login, 
-      action: 'LOGOUT', 
-      status: 'SUCCESS' 
-    });
-
-    // 🍪 Cookie’larni tozalash
     res.clearCookie('accessToken');
     res.clearCookie('refreshToken');
-
     res.json({ success: true, message: '✅ Logout muvaffaqiyatli' });
   } catch (err) {
     console.error('❌ Logout xatosi:', err);
@@ -662,9 +574,6 @@ exports.logout = async (req, res) => {
 // 🛡️ RBAC & ADMIN
 // ====================================================================
 
-/**
- * Admin huquqini tekshirish (middleware)
- */
 exports.isAdmin = (req, res, next) => {
   if (req.user.role !== 'admin') {
     return res.status(403).json({ message: 'Admin huquqi talab qilinadi' });
@@ -672,9 +581,6 @@ exports.isAdmin = (req, res, next) => {
   next();
 };
 
-/**
- * Admin yaratish
- */
 exports.createAdmin = async (req, res) => {
   const { login, password } = req.body;
 
@@ -684,23 +590,16 @@ exports.createAdmin = async (req, res) => {
 
   try {
     const normalizedLogin = login.trim().toLowerCase();
-
     const existingUser = await User.findOne({ login: normalizedLogin });
-    if (existingUser) {
-      return res.status(409).json({ message: 'Bu login allaqachon mavjud' });
-    }
+    if (existingUser) return res.status(409).json({ message: 'Bu login allaqachon mavjud' });
 
     const newUser = new User({ login: normalizedLogin, password, role: 'admin' });
     await newUser.save();
 
-    await AuditService.logUserAction({ 
-      login: normalizedLogin, 
-      action: 'CREATE_ADMIN', 
-      status: 'SUCCESS' 
-    });
+    await AuditService.logUserAction({ login: normalizedLogin, action: 'CREATE_ADMIN', status: 'SUCCESS' });
 
     res.status(201).json({
-      message: '✅ Admin foydalanuvchi yaratildi',
+      message: '✅ Admin yaratildi',
       user: { login: normalizedLogin, role: newUser.role }
     });
   } catch (err) {
@@ -709,17 +608,16 @@ exports.createAdmin = async (req, res) => {
   }
 };
 
-
 module.exports = {
-  login: exports.login,
-  refresh: exports.refresh,
+  login:          exports.login,
+  refresh:        exports.refresh,
   changePassword: exports.changePassword,
-  register: exports.register,
-  confirmLogin: exports.confirmLogin,
+  register:       exports.register,
+  confirmLogin:   exports.confirmLogin,
   getUserDevices: exports.getUserDevices,
-  kickDevice: exports.kickDevice,
-  logout: exports.logout,
-  isAdmin: exports.isAdmin,
-  createAdmin: exports.createAdmin,
+  kickDevice:     exports.kickDevice,
+  logout:         exports.logout,
+  isAdmin:        exports.isAdmin,
+  createAdmin:    exports.createAdmin,
   generateTokens: exports.generateTokens
 };
