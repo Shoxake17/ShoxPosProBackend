@@ -4,13 +4,27 @@ const User = require('../models/User');
 const UserSession = require('../models/UserSession');
 const AuditService = require('../services/auditService');
 const UserSessionService = require('../services/userSessionService');
-const TokenBlacklistService = require('../services/tokenBlacklistService'); // ✅ YANGI
+const TokenBlacklistService = require('../services/tokenBlacklistService');
 
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const speakeasy = require('speakeasy');
 const { v4: uuidv4 } = require('uuid');
 const config = require('../config');
+
+// ====================================================================
+// 🍪 COOKIE SOZLAMASI — development va production uchun
+// ====================================================================
+const isDev = (config.NODE_ENV || process.env.NODE_ENV) !== 'production';
+
+// ✅ FIX: development da 'lax', production da 'strict'
+// 'strict' cross-port so'rovlarda cookie yubormasligiga sabab bo'ladi
+const cookieOptions = {
+  httpOnly: true,
+  secure: !isDev,
+  sameSite: isDev ? 'lax' : 'strict',
+  path: '/',
+};
 
 // ====================================================================
 // 🔑 TOKEN GENERATOR
@@ -31,11 +45,11 @@ function createTokens(user, deviceId = null) {
 
   const refreshTokenId = uuidv4();
   const refreshToken = jwt.sign(
-    { 
+    {
       id: user._id.toString(),
-      login: user.login, 
-      tokenId: refreshTokenId, 
-      deviceId 
+      login: user.login,
+      tokenId: refreshTokenId,
+      deviceId
     },
     process.env.JWT_REFRESH_SECRET,
     { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d' }
@@ -52,13 +66,13 @@ exports.generateTokens = async (user, deviceId = null) => {
 // 🔐 LOGIN
 // ====================================================================
 exports.login = async (req, res) => {
-  const { 
-    login, 
-    password, 
-    googleAuthCode, 
-    deviceId, 
-    deviceType, 
-    deviceOS 
+  const {
+    login,
+    password,
+    googleAuthCode,
+    deviceId,
+    deviceType,
+    deviceOS
   } = req.body;
 
   if (!deviceId || !deviceType || !deviceOS) {
@@ -67,18 +81,11 @@ exports.login = async (req, res) => {
 
   try {
     const normalizedLogin = (login || "").trim().toLowerCase();
-
     const user = await User.findOne({ login: normalizedLogin }).select('+password');
 
-    if (!user) {
-      return res.status(404).json({ message: "Foydalanuvchi topilmadi" });
-    }
+    if (!user) return res.status(404).json({ message: "Foydalanuvchi topilmadi" });
+    if (user.isDeleted) return res.status(403).json({ message: "Hisob o'chirilgan" });
 
-    if (user.isDeleted) {
-      return res.status(403).json({ message: "Hisob o'chirilgan" });
-    }
-
-    // Bloklangan qurilma tekshiruvi
     const blockedDevice = user.blockedDevices?.find(d => d.deviceId === deviceId);
     if (blockedDevice && new Date() < new Date(blockedDevice.lockUntil)) {
       return res.status(403).json({
@@ -94,83 +101,52 @@ exports.login = async (req, res) => {
 
     if (!isMatch) {
       user.loginAttempts = (user.loginAttempts || 0) + 1;
-
       if (user.loginAttempts >= 5) {
         user.blockedDevices = user.blockedDevices || [];
-        user.blockedDevices.push({
-          deviceId,
-          lockUntil: new Date(Date.now() + 30 * 60 * 1000)
-        });
+        user.blockedDevices.push({ deviceId, lockUntil: new Date(Date.now() + 30 * 60 * 1000) });
         user.loginAttempts = 0;
         await user.save();
-        return res.status(403).json({
-          message: "5 ta noto'g'ri urinish. Qurilma 30 minut bloklandi."
-        });
+        return res.status(403).json({ message: "5 ta noto'g'ri urinish. Qurilma 30 minut bloklandi." });
       }
-
       await user.save();
       return res.status(401).json({ message: "Parol noto'g'ri" });
     }
 
-    // Google Authenticator tekshiruvi
     if (user.googleAuthEnabled) {
       if (!googleAuthCode) {
-        return res.status(200).json({
-          requiresGoogleAuth: true,
-          message: "Google Authenticator kodi talab qilinadi"
-        });
+        return res.status(200).json({ requiresGoogleAuth: true, message: "Google Authenticator kodi talab qilinadi" });
       }
-
       const verified = speakeasy.totp.verify({
         secret: user.googleAuthSecret,
         encoding: 'base32',
         token: googleAuthCode,
         window: 2
       });
-
       if (!verified) {
         user.loginAttempts = (user.loginAttempts || 0) + 1;
         if (user.loginAttempts >= 5) {
           user.blockedDevices = user.blockedDevices || [];
-          user.blockedDevices.push({
-            deviceId,
-            lockUntil: new Date(Date.now() + 30 * 60 * 1000)
-          });
+          user.blockedDevices.push({ deviceId, lockUntil: new Date(Date.now() + 30 * 60 * 1000) });
           user.loginAttempts = 0;
           await user.save();
-          return res.status(403).json({
-            message: "5 ta noto'g'ri Google Auth urinish. Qurilma 30 minut bloklandi."
-          });
+          return res.status(403).json({ message: "5 ta noto'g'ri Google Auth urinish. Qurilma 30 minut bloklandi." });
         }
         await user.save();
         return res.status(400).json({ message: "Google Authenticator kodi noto'g'ri" });
       }
     }
 
-    // Muvaffaqiyatli login
     user.loginAttempts = 0;
-
-    // Token yaratish
     const { accessToken, refreshToken, refreshTokenId } = createTokens(user, deviceId);
 
-    // ✅ devices arrayni yangilash — TOKEN SAQLASH
     const deviceExists = user.devices?.some(d => d.deviceId === deviceId);
-
     if (deviceExists) {
-      // Mavjud qurilmani yangilash
       user.devices = user.devices.map(d =>
         d.deviceId === deviceId
-          ? { 
-              ...d.toObject(), 
-              lastLogin: new Date(), 
-              isActive: true,
-              token: accessToken,  // ✅ TOKEN SAQLANDI
-              kickedAt: null
-            }
+          ? { ...d.toObject(), lastLogin: new Date(), isActive: true, token: accessToken, kickedAt: null }
           : { ...d.toObject(), isActive: false }
       );
     } else {
-      // Yangi qurilma qo'shish
       user.devices = user.devices || [];
       user.devices.push({
         deviceId,
@@ -178,7 +154,7 @@ exports.login = async (req, res) => {
         deviceOS: deviceOS || "unknown",
         lastLogin: new Date(),
         isActive: true,
-        token: accessToken,  // ✅ TOKEN SAQLANDI
+        token: accessToken,
         kickedAt: null,
         isSuspicious: false,
         isTrusted: false
@@ -194,60 +170,29 @@ exports.login = async (req, res) => {
 
     await user.save();
 
-    // Cookie sozlamalari
-    const cookieOptions = {
-      httpOnly: true,
-      secure: config.NODE_ENV === 'production',
-      sameSite: 'strict',
-      path: '/'
-    };
+    // ✅ FIX: cookieOptions endi yuqorida isDev ga qarab belgilangan
+    res.cookie('accessToken', accessToken, { ...cookieOptions, maxAge: 15 * 60 * 1000 });
+    res.cookie('refreshToken', refreshToken, { ...cookieOptions, maxAge: 7 * 24 * 60 * 60 * 1000 });
 
-    res.cookie('accessToken', accessToken, {
-      ...cookieOptions,
-      maxAge: 15 * 60 * 1000
-    });
-
-    res.cookie('refreshToken', refreshToken, {
-      ...cookieOptions,
-      maxAge: 7 * 24 * 60 * 60 * 1000
-    });
-
-    // Sessiya yaratish
     await UserSessionService.createSession({
       userId: user._id,
       deviceId,
       ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress,
       userAgent: req.headers['user-agent'],
-      refreshTokens: [{
-        tokenId: refreshTokenId,
-        token: refreshToken,
-        deviceId,
-        createdAt: new Date()
-      }]
+      refreshTokens: [{ tokenId: refreshTokenId, token: refreshToken, deviceId, createdAt: new Date() }]
     });
 
-    await AuditService.logUserAction({ 
-      login: user.login, 
-      action: 'LOGIN', 
-      status: 'SUCCESS' 
-    });
+    await AuditService.logUserAction({ login: user.login, action: 'LOGIN', status: 'SUCCESS' });
 
     return res.json({
       success: true,
       message: 'Kirish muvaffaqiyatli',
-      user: { 
-        login: user.login, 
-        role: user.role,
-        name: user.name || null
-      }
+      user: { login: user.login, role: user.role, name: user.name || null }
     });
 
   } catch (err) {
     console.error("❌ Login xatosi:", err.stack || err);
-    return res.status(500).json({ 
-      success: false,
-      message: "Server xatosi yuz berdi" 
-    });
+    return res.status(500).json({ success: false, message: "Server xatosi yuz berdi" });
   }
 };
 
@@ -258,13 +203,13 @@ exports.refresh = async (req, res) => {
   const refreshToken = req.cookies.refreshToken;
 
   if (!refreshToken) {
-    return res.status(401).json({ message: 'Refresh token yo\'q' });
+    return res.status(401).json({ message: "Refresh token yo'q" });
   }
 
   try {
     const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
     const user = await User.findOne({ login: decoded.login });
-    
+
     if (!user || user.blocked) {
       return res.status(403).json({ message: 'Foydalanuvchi bloklangan' });
     }
@@ -273,14 +218,13 @@ exports.refresh = async (req, res) => {
     const validToken = session?.refreshTokens?.find(
       rt => rt.tokenId === decoded.tokenId && rt.token === refreshToken
     );
-    
+
     if (!validToken) {
-      return res.status(403).json({ message: 'Token noto\'g\'ri' });
+      return res.status(403).json({ message: "Token noto'g'ri" });
     }
 
     const { accessToken, refreshToken: newRefreshToken, refreshTokenId } = createTokens(user, decoded.deviceId);
 
-    // ✅ Yangi accessToken ni devices[] ga ham saqlash
     await User.updateOne(
       { login: user.login, 'devices.deviceId': decoded.deviceId },
       { $set: { 'devices.$.token': accessToken } }
@@ -290,30 +234,12 @@ exports.refresh = async (req, res) => {
       userId: user._id,
       deviceId: decoded.deviceId,
       oldTokenId: decoded.tokenId,
-      newToken: {
-        tokenId: refreshTokenId,
-        token: newRefreshToken,
-        deviceId: decoded.deviceId,
-        createdAt: new Date()
-      }
+      newToken: { tokenId: refreshTokenId, token: newRefreshToken, deviceId: decoded.deviceId, createdAt: new Date() }
     });
 
-    const cookieOptions = {
-      httpOnly: true,
-      secure: config.NODE_ENV === 'production',
-      sameSite: 'strict',
-      path: '/'
-    };
-
-    res.cookie('accessToken', accessToken, {
-      ...cookieOptions,
-      maxAge: 15 * 60 * 1000
-    });
-
-    res.cookie('refreshToken', newRefreshToken, {
-      ...cookieOptions,
-      maxAge: 7 * 24 * 60 * 60 * 1000
-    });
+    // ✅ FIX: refresh da ham cookieOptions ishlatiladi
+    res.cookie('accessToken', accessToken, { ...cookieOptions, maxAge: 15 * 60 * 1000 });
+    res.cookie('refreshToken', newRefreshToken, { ...cookieOptions, maxAge: 7 * 24 * 60 * 60 * 1000 });
 
     res.json({ success: true });
   } catch (err) {
@@ -325,25 +251,23 @@ exports.refresh = async (req, res) => {
 // ====================================================================
 // 💻 QURILMALAR BOSHQARUVI
 // ====================================================================
-
-/**
- * Foydalanuvchi qurilmalarini olish
- */
 exports.getUserDevices = async (req, res) => {
   try {
     const user = await User.findOne({ login: req.user.login }).select('devices');
     if (!user) return res.status(404).json({ message: "Foydalanuvchi topilmadi" });
 
-    // ✅ Token va maxfiy fieldlarni yubormaslik
-    const devices = (user.devices || []).map(d => ({
-      deviceId:     d.deviceId,
-      deviceType:   d.deviceType,
-      deviceOS:     d.deviceOS,
-      isActive:     d.isActive,
-      lastLogin:    d.lastLogin,
-      isTrusted:    d.isTrusted,
-      isSuspicious: d.isSuspicious
-    }));
+   const devices = (user.devices || []).map(d => ({
+  deviceId:     d.deviceId,
+  deviceType:   d.deviceType,
+  deviceOS:     d.deviceOS,
+  deviceModel:  d.deviceModel  || null,  
+  location:     d.location     || null,   
+  ip:           d.ip           || null, 
+  isActive:     d.isActive,
+  lastLogin:    d.lastLogin,
+  isTrusted:    d.isTrusted,
+  isSuspicious: d.isSuspicious
+}));
 
     res.json({ success: true, devices });
   } catch (err) {
@@ -352,9 +276,6 @@ exports.getUserDevices = async (req, res) => {
   }
 };
 
-/**
- * Qurilmani tizimdan chiqarish
- */
 exports.kickDevice = async (req, res) => {
   const { deviceId } = req.body;
   const login = req.user.login;
@@ -365,63 +286,40 @@ exports.kickDevice = async (req, res) => {
 
   // ✅ O'z qurilmasini kick qilishga yo'l qo'ymaslik
   if (req.user.deviceId && req.user.deviceId === deviceId) {
-    return res.status(400).json({ 
-      message: "O'z qurilmangizni chiqarib yuborib bo'lmaydi" 
-    });
+    return res.status(400).json({ message: "O'z qurilmangizni chiqarib yuborib bo'lmaydi" });
   }
 
   try {
     const user = await User.findOne({ login });
-    if (!user) {
-      return res.status(404).json({ message: "Foydalanuvchi topilmadi" });
-    }
+    if (!user) return res.status(404).json({ message: "Foydalanuvchi topilmadi" });
 
-    // ✅ 1: Qurilmaning tokenini topib blacklistga qo'shish
     const deviceSession = (user.devices || []).find(d => d.deviceId === deviceId);
-
     if (deviceSession?.token) {
-      await TokenBlacklistService.add(deviceSession.token, {
-        login,
-        deviceId,
-        reason: 'kicked'
-      });
+      await TokenBlacklistService.add(deviceSession.token, { login, deviceId, reason: 'kicked' });
       console.log(`⛔ Token blacklistga qo'shildi: ${login} | ${deviceId}`);
     } else {
       console.warn(`⚠️ Token topilmadi — qurilma offline yoki token yo'q: ${deviceId}`);
     }
 
-    // ✅ 2: getSocketByDevice orqali FAQAT o'sha qurilmaga forceLogout yuborish
     const { io } = require('../server');
     const { getSocketByDevice } = require('../socket');
-
     const targetSockets = getSocketByDevice(login, deviceId);
     console.log(`🎯 Kick: ${login} | ${deviceId} | socketlar: ${targetSockets.length}`);
 
     if (targetSockets.length > 0) {
       targetSockets.forEach(socketId => {
-        io.to(socketId).emit('forceLogout', {  // ✅ 'forceLogout' — main.tsx bilan mos
-          reason: 'Boshqa qurilma tomonidan tizimdan chiqarildingiz'
-        });
+        io.to(socketId).emit('forceLogout', { reason: 'Boshqa qurilma tomonidan tizimdan chiqarildingiz' });
         console.log(`⛔ forceLogout yuborildi → ${socketId}`);
       });
     } else {
       console.warn(`⚠️ Socket topilmadi — qurilma offline bo'lishi mumkin`);
-      // Fallback: qurilma keyingi so'rovda verifyToken → blacklist → 401 oladi
     }
 
-    // ✅ 3: DB yangilash
     await User.updateOne(
       { login, 'devices.deviceId': deviceId },
-      {
-        $set: {
-          'devices.$.isActive': false,
-          'devices.$.token':    null,
-          'devices.$.kickedAt': new Date()
-        }
-      }
+      { $set: { 'devices.$.isActive': false, 'devices.$.token': null, 'devices.$.kickedAt': new Date() } }
     );
 
-    // ✅ 4: activeDevice ni tozalash
     if (user.activeDevice?.deviceId === deviceId) {
       await User.updateOne({ login }, { $set: { activeDevice: null } });
     }
@@ -438,23 +336,17 @@ exports.kickDevice = async (req, res) => {
 // ====================================================================
 // 👤 FOYDALANUVCHI BOSHQARUVI
 // ====================================================================
-
 exports.changePassword = async (req, res) => {
   const { login, currentPassword, newPassword } = req.body;
-
   try {
     const normalizedLogin = (login || '').trim().toLowerCase();
     const user = await User.findOne({ login: normalizedLogin }).select('+password');
-
     if (!user) return res.status(404).json({ message: 'Foydalanuvchi topilmadi' });
     if (!user.password) return res.status(500).json({ message: 'Server xatosi: parol topilmadi' });
-
     const isMatch = await bcrypt.compare(currentPassword, user.password);
     if (!isMatch) return res.status(401).json({ message: "Joriy parol noto'g'ri" });
-
     user.password = newPassword;
     await user.save();
-
     return res.json({ success: true, message: "Parol muvaffaqiyatli o'zgartirildi" });
   } catch (err) {
     console.error('changePassword xatosi:', err.stack || err);
@@ -464,29 +356,16 @@ exports.changePassword = async (req, res) => {
 
 exports.register = async (req, res) => {
   const { login, password, role = 'seller' } = req.body;
-
-  if (!login || !password) {
-    return res.status(400).json({ message: 'Login va parol majburiy' });
-  }
-
-  if (!['seller', 'admin', 'cashier'].includes(role)) {
-    return res.status(400).json({ message: "Noto'g'ri role" });
-  }
-
+  if (!login || !password) return res.status(400).json({ message: 'Login va parol majburiy' });
+  if (!['seller', 'admin', 'cashier'].includes(role)) return res.status(400).json({ message: "Noto'g'ri role" });
   try {
     const normalizedLogin = login.trim().toLowerCase();
     const existingUser = await User.findOne({ login: normalizedLogin });
     if (existingUser) return res.status(409).json({ message: 'Bu login allaqachon mavjud' });
-
     const newUser = new User({ login: normalizedLogin, password, role });
     await newUser.save();
-
     await AuditService.logUserAction({ login: normalizedLogin, action: 'REGISTER', status: 'SUCCESS' });
-
-    res.status(201).json({
-      message: '✅ Foydalanuvchi yaratildi',
-      user: { login: normalizedLogin, role: newUser.role }
-    });
+    res.status(201).json({ message: '✅ Foydalanuvchi yaratildi', user: { login: normalizedLogin, role: newUser.role } });
   } catch (err) {
     console.error('❌ Register xatosi:', err);
     res.status(500).json({ message: 'Server xatosi', error: err.message });
@@ -495,27 +374,22 @@ exports.register = async (req, res) => {
 
 exports.confirmLogin = async (req, res) => {
   const { login, deviceId, deviceType = 'unknown', deviceOS = 'unknown', confirm } = req.body;
-
   try {
     const normalizedLogin = (login || '').trim().toLowerCase();
     const user = await User.findOne({ login: normalizedLogin });
     if (!user) return res.status(404).json({ message: 'Foydalanuvchi topilmadi' });
-
     if (confirm) {
-      if (user.activeDevice && user.activeDevice.deviceId) {
+      if (user.activeDevice?.deviceId) {
         await UserSession.updateOne(
           { userId: user._id, deviceId: user.activeDevice.deviceId, isActive: true },
           { isActive: false, lastLogout: new Date() }
         );
       }
-
       user.activeDevice = { deviceId, deviceType, deviceOS, lastLogin: new Date() };
       await user.save();
-
       await AuditService.logUserAction({ login: normalizedLogin, action: 'CONFIRM_DEVICE', status: 'SUCCESS' });
       return res.json({ message: "Yangi qurilmaga o'tkazildi" });
     }
-
     await AuditService.logUserAction({ login: normalizedLogin, action: 'CONFIRM_DEVICE', status: 'DECLINED' });
     return res.json({ message: 'Kirish rad etildi' });
   } catch (err) {
@@ -526,7 +400,6 @@ exports.confirmLogin = async (req, res) => {
 
 exports.logout = async (req, res) => {
   const { userId, deviceId } = req.body;
-
   try {
     const session = await UserSession.findOne({ userId, deviceId, isActive: true });
     if (session) {
@@ -534,33 +407,22 @@ exports.logout = async (req, res) => {
       session.lastLogout = new Date();
       await session.save();
     }
-
     const user = await User.findById(userId);
     if (user) {
-      // ✅ Logout paytida ham token blacklistga
       const deviceSession = (user.devices || []).find(d => d.deviceId === deviceId);
       if (deviceSession?.token) {
-        await TokenBlacklistService.add(deviceSession.token, {
-          login: user.login,
-          deviceId,
-          reason: 'logout'
-        });
+        await TokenBlacklistService.add(deviceSession.token, { login: user.login, deviceId, reason: 'logout' });
       }
-
-      // devices da isActive = false
       await User.updateOne(
         { _id: userId, 'devices.deviceId': deviceId },
         { $set: { 'devices.$.isActive': false, 'devices.$.token': null } }
       );
-
       if (user.activeDevice?.deviceId === deviceId) {
         user.activeDevice = null;
         await user.save();
       }
-
       await AuditService.logUserAction({ login: user.login, action: 'LOGOUT', status: 'SUCCESS' });
     }
-
     res.clearCookie('accessToken');
     res.clearCookie('refreshToken');
     res.json({ success: true, message: '✅ Logout muvaffaqiyatli' });
@@ -573,35 +435,22 @@ exports.logout = async (req, res) => {
 // ====================================================================
 // 🛡️ RBAC & ADMIN
 // ====================================================================
-
 exports.isAdmin = (req, res, next) => {
-  if (req.user.role !== 'admin') {
-    return res.status(403).json({ message: 'Admin huquqi talab qilinadi' });
-  }
+  if (req.user.role !== 'admin') return res.status(403).json({ message: 'Admin huquqi talab qilinadi' });
   next();
 };
 
 exports.createAdmin = async (req, res) => {
   const { login, password } = req.body;
-
-  if (!login || !password) {
-    return res.status(400).json({ message: 'Login va parol majburiy' });
-  }
-
+  if (!login || !password) return res.status(400).json({ message: 'Login va parol majburiy' });
   try {
     const normalizedLogin = login.trim().toLowerCase();
     const existingUser = await User.findOne({ login: normalizedLogin });
     if (existingUser) return res.status(409).json({ message: 'Bu login allaqachon mavjud' });
-
     const newUser = new User({ login: normalizedLogin, password, role: 'admin' });
     await newUser.save();
-
     await AuditService.logUserAction({ login: normalizedLogin, action: 'CREATE_ADMIN', status: 'SUCCESS' });
-
-    res.status(201).json({
-      message: '✅ Admin yaratildi',
-      user: { login: normalizedLogin, role: newUser.role }
-    });
+    res.status(201).json({ message: '✅ Admin yaratildi', user: { login: normalizedLogin, role: newUser.role } });
   } catch (err) {
     console.error('❌ CreateAdmin xatosi:', err);
     res.status(500).json({ message: 'Server xatosi', error: err.message });
