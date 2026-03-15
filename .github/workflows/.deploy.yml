@@ -1,4 +1,4 @@
-name: Deploy ShoxPosPro v1
+name: Deploy ShoxPosPro Backend
 
 on:
   push:
@@ -8,17 +8,30 @@ jobs:
   deploy:
     runs-on: self-hosted
     steps:
-      - name: Kodni serverga yuklash (Checkout)
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-
-      - name: Kodni asosiy papkaga ko'chirish (Sync)
+      - name: Sync to Projects Folder
         run: |
-          rsync -avz --exclude '.env' --exclude 'node_modules' --exclude '.git' ./ ~/projects/ShoxPosProBackend/
+          # Backend kodini asosiy papkaga nusxalash
+          rsync -avz --delete --exclude '.env' --exclude 'node_modules' --exclude '.git' ./ ~/projects/ShoxPosProBackend/
 
-      - name: Loyihani yangilash va Restart (PM2)
+      - name: Deploy with Docker Compose
         run: |
-          cd ~/projects/ShoxPosProBackend
-          # Tizimdagi npm va node ishlatiladi
-          npm install --production
-          pm2 restart ShoxPosProBackend || pm2 start server.js --name "ShoxPosProBackend"
+          cd ~/projects
+          
+          # 1. Faqat Backend imidjini qayta qurish (Build)
+          # Bu loyihangizdagi Dockerfile asosida imidj yaratadi
+          docker compose build backend
+          
+          # 2. PM2 bilan to'qnashuvni oldini olish (Eski PM2 jarayonini to'xtatish)
+          # Agar PM2 da ishlab turgan bo'lsa, uni to'xtatamiz (ixtiyoriy, lekin tavsiya etiladi)
+          pm2 delete ShoxPosProBackend || true
+          
+          # 3. Backend konteynerini yangilash
+          # --no-deps: Frontend yoki boshqa servislarga tegmaydi
+          # --force-recreate: Eskisini o'chirib, yangisini ishga tushiradi
+          docker compose up -d --no-deps --force-recreate backend
+          
+          # 4. Tozalash
+          docker image prune -f
