@@ -14,8 +14,10 @@ const cookieParser = require('cookie-parser');
 const csrf = require('csurf');
 const connectDB = require('./config/db');
 const User = require('./models/User');
-const verifyToken = require('./middleware/verifyToken');                    // ✅ YANGI
-const TokenBlacklistService = require('./services/tokenBlacklistService'); // ✅ YANGI
+const verifyToken = require('./middleware/verifyToken');
+const TokenBlacklistService = require('./services/tokenBlacklistService');
+const authController = require('./controllers/authController');
+const cashbackProxy = require('./routes/cashbackProxy');
 
 connectDB();
 
@@ -81,8 +83,9 @@ const io = socketIo(server, {
 // ====================================
 // 📦 MIDDLEWARE
 // ====================================
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+// Body size: 2mb — katta JSON DoS hujumlarini cheklash (file upload alohida multer bilan)
+app.use(express.json({ limit: '2mb' }));
+app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 app.use(express.static('public'));
 app.use(express.static(path.join(__dirname, 'public', 'dist')));
 app.use("/temp", express.static(path.join(__dirname, "temp")));
@@ -103,6 +106,12 @@ const csrfProtection = csrf({
 app.get('/api/csrf-token', csrfProtection, (req, res) => {
   res.json({ csrfToken: req.csrfToken() });
 });
+
+// ====================================
+// 🛡️ GLOBAL API RATE LIMIT (DoS/DDoS)
+// ====================================
+const apiLimiter = require('./middleware/apiRateLimit');
+app.use('/api', apiLimiter);
 
 // ====================================
 // 📝 LOGGING
@@ -127,7 +136,6 @@ const biometricRouter = require('./routes/biometricRoutes');
 const printerRoutes = require('./routes/printerRoutes')(io);
 const authenticatorRouter = require('./routes/authenticatorRoutes');
 const adminRoutes = require('./routes/adminRoutes');
-const cashbackRoutes = require('./routes/cashback');
 
 app.use('/api', authRouter);
 app.use('/api', biometricRouter);
@@ -140,7 +148,7 @@ app.use("/api", scanProductsRouter);
 app.use('/api', debtsRoutes);
 app.use('/api', salesRoutes);
 app.use('/api/admin', adminRoutes);
-app.use('/api', cashbackRoutes);
+app.use('/api/cashback', cashbackProxy);
 
 initIO(io);
 console.log("✅ Barcha routerlar ulandi");
@@ -149,12 +157,15 @@ console.log("✅ Barcha routerlar ulandi");
 // 📦 API ENDPOINTLAR
 // ====================================
 
-// Foydalanuvchi holati
-app.get("/api/user-status", async (req, res) => {
+// Foydalanuvchi holati (faqat kirigan user o'zini yoki admin boshqasini ko'radi)
+app.get("/api/user-status", verifyToken, async (req, res) => {
   const login = req.query.login;
   if (!login) return res.status(400).json({ error: "Login kerak" });
+  if (req.user.login !== login.toLowerCase().trim() && req.user.role !== 'admin') {
+    return res.status(403).json({ error: "Ruxsat yo'q" });
+  }
   try {
-    const user = await User.findOne({ login }).select('-password');
+    const user = await User.findOne({ login: login.toLowerCase().trim() }).select('-password');
     if (!user) return res.status(404).json({ error: "Foydalanuvchi topilmadi" });
     res.json(user);
   } catch (err) {
@@ -163,8 +174,8 @@ app.get("/api/user-status", async (req, res) => {
   }
 });
 
-// Foydalanuvchini aktivlashtirish
-app.post('/api/activate-user', async (req, res) => {
+// Foydalanuvchini aktivlashtirish (faqat admin)
+app.post('/api/activate-user', verifyToken, authController.isAdmin, async (req, res) => {
   const { login } = req.body;
   if (!login) return res.status(400).json({ message: "Login kerak" });
   try {
@@ -187,13 +198,16 @@ app.post('/api/activate-user', async (req, res) => {
   }
 });
 
-// Logout
-app.post('/api/logout', async (req, res) => {
+// Logout (auth routerda ham bor; bu duplicate - verifyToken bilan himoyalaymiz)
+app.post('/api/logout', verifyToken, async (req, res) => {
   try {
     const { login, deviceId } = req.body;
     if (!login || !deviceId) return res.status(400).json({ message: 'Login va deviceId kerak' });
+    if (req.user.login !== login.toLowerCase().trim() && req.user.role !== 'admin') {
+      return res.status(403).json({ message: "Ruxsat yo'q" });
+    }
 
-    const user = await User.findOne({ login });
+    const user = await User.findOne({ login: login.toLowerCase().trim() });
     if (!user) return res.status(404).json({ message: 'Foydalanuvchi topilmadi.' });
 
     if (user.desktopDeviceId === deviceId) user.desktopDeviceId = null;
@@ -219,8 +233,8 @@ app.post('/api/logout', async (req, res) => {
   }
 });
 
-// Foydalanuvchini bloklash
-app.post('/api/block-user', async (req, res) => {
+// Foydalanuvchini bloklash (faqat admin)
+app.post('/api/block-user', verifyToken, authController.isAdmin, async (req, res) => {
   const { login } = req.body;
   if (!login) return res.status(400).json({ message: "Login kerak" });
   try {
@@ -245,8 +259,8 @@ app.post('/api/block-user', async (req, res) => {
   }
 });
 
-// Faol foydalanuvchilar
-app.get('/api/active-users', async (req, res) => {
+// Faol foydalanuvchilar (faqat admin)
+app.get('/api/active-users', verifyToken, authController.isAdmin, async (req, res) => {
   try {
     const users = await User.find({}).select('-password');
     res.json(users);
@@ -256,12 +270,15 @@ app.get('/api/active-users', async (req, res) => {
   }
 });
 
-// Status tekshirish
-app.post('/api/check-status', async (req, res) => {
+// Status tekshirish (faqat kirigan user o'zini yoki admin boshqasini tekshiradi)
+app.post('/api/check-status', verifyToken, async (req, res) => {
   const { login, deviceId } = req.body;
   if (!login || !deviceId) return res.status(400).json({ active: false, reason: "Login va deviceId kerak" });
+  if (req.user.login !== login.toLowerCase().trim() && req.user.role !== 'admin') {
+    return res.status(403).json({ active: false, reason: "Ruxsat yo'q" });
+  }
   try {
-    const user = await User.findOne({ login });
+    const user = await User.findOne({ login: login.toLowerCase().trim() });
     if (!user) return res.json({ active: false, reason: "Foydalanuvchi topilmadi" });
     if (user.blocked) return res.json({ active: false, reason: "Siz bloklangansiz!" });
     if (user.desktopDeviceId !== deviceId && user.mobileDeviceId !== deviceId) {
@@ -274,10 +291,13 @@ app.post('/api/check-status', async (req, res) => {
   }
 });
 
-// Loginni tasdiqlash
-app.post("/api/confirm-login", async (req, res) => {
+// Loginni tasdiqlash (verifyToken auth routerda; bu duplicate - himoyalaymiz)
+app.post("/api/confirm-login", verifyToken, async (req, res) => {
   const { login, deviceId, confirm } = req.body;
   if (!login || !deviceId) return res.status(400).json({ message: "❌ Login va deviceId kerak" });
+  if (req.user.login !== login.toLowerCase().trim() && req.user.role !== 'admin') {
+    return res.status(403).json({ message: "Ruxsat yo'q" });
+  }
   try {
     const user = await User.findOne({ login });
     if (!user) return res.status(404).json({ message: "❌ Foydalanuvchi topilmadi" });

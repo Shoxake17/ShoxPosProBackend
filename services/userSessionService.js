@@ -1,16 +1,43 @@
 const UserSession = require('../models/UserSession');
 
-exports.createSession = async ({ userId, deviceId, ip, userAgent, refreshTokenId, refreshToken }) => {
+/**
+ * Yangi sessiya yaratish yoki mavjudini yangilash.
+ * refreshTokenId / refreshToken kelsa, ularni refreshTokens massiviga to'liq
+ * ma'lumot (tokenId, token, deviceId, deviceType, deviceOS, createdAt) bilan qo'shadi.
+ */
+exports.createSession = async ({
+  userId,
+  deviceId,
+  ip,
+  userAgent,
+  refreshTokenId,
+  refreshToken,
+  deviceType,
+  deviceOS,
+}) => {
   try {
-    // Yangi session yaratish yoki mavjudini yangilash
     let session = await UserSession.findOne({ userId, deviceId });
     if (!session) {
-      session = new UserSession({ userId, deviceId, ip, userAgent, refreshTokens: [] });
+      session = new UserSession({
+        userId,
+        deviceId,
+        ip: ip || null,
+        userAgent: userAgent || null,
+        refreshTokens: [],
+      });
     }
-    // Refresh token qo'shish
+
     if (refreshTokenId && refreshToken) {
-      session.refreshTokens.push({ tokenId: refreshTokenId, token: refreshToken });
+      session.refreshTokens.push({
+        tokenId: refreshTokenId,
+        token: refreshToken,
+        deviceId,
+        deviceType: deviceType || 'Unknown',
+        deviceOS: deviceOS || 'Unknown',
+        createdAt: new Date(),
+      });
     }
+
     session.updatedAt = new Date();
     await session.save();
   } catch (err) {
@@ -21,7 +48,6 @@ exports.createSession = async ({ userId, deviceId, ip, userAgent, refreshTokenId
 
 exports.endSession = async ({ userId, deviceId, reason }) => {
   try {
-    // Device bo'yicha sessionni o'chirish
     await UserSession.findOneAndDelete({ userId, deviceId });
     console.log(`🔴 SESSION ENDED: user ${userId}, device ${deviceId}, reason: ${reason}`);
   } catch (err) {
@@ -37,6 +63,48 @@ exports.getSession = async (userId, deviceId) => {
     return session;
   } catch (err) {
     console.error('❌ getSession xatosi:', err);
+    throw err;
+  }
+};
+
+/**
+ * Eski refreshToken ni yangisiga almashtirish.
+ * Agar sessiya topilmasa, yangi sessiya yaratadi.
+ */
+exports.rotateRefreshToken = async ({
+  userId,
+  deviceId,
+  oldTokenId,
+  newToken,
+}) => {
+  try {
+    let session = await UserSession.findOne({ userId, deviceId });
+
+    if (!session) {
+      if (!newToken) return;
+      session = new UserSession({
+        userId,
+        deviceId,
+        refreshTokens: [newToken],
+      });
+      await session.save();
+      return;
+    }
+
+    if (oldTokenId) {
+      session.refreshTokens = (session.refreshTokens || []).filter(
+        (rt) => rt.tokenId !== oldTokenId,
+      );
+    }
+
+    if (newToken) {
+      session.refreshTokens.push(newToken);
+    }
+
+    session.updatedAt = new Date();
+    await session.save();
+  } catch (err) {
+    console.error('❌ rotateRefreshToken xatosi:', err);
     throw err;
   }
 };

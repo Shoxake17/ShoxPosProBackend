@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const mongoose = require("mongoose");
+const { escapeRegex } = require("../utils/escapeRegex");
 
 // 🔹 Dinamik loginProducts modeli yaratish
 function getProductModel(login) {
@@ -41,16 +42,18 @@ router.get("/scan-product/:login", async (req, res) => {
     let product = null;
     if (barcode) {
       product = await LoginProduct.findOne({ barcode });
-    } else if (name) {
-      product = await LoginProduct.findOne({ name: new RegExp(name, "i") });
+    } else if (name && typeof name === 'string') {
+      const safeName = escapeRegex(name, 200);
+      if (safeName) product = await LoginProduct.findOne({ name: new RegExp(safeName, "i") });
     }
 
     // 2️⃣ Agar loginProductsda topilmasa, umumiy products'dan qidirish
     if (!product) {
       if (barcode) {
         product = await Product.findOne({ barcode });
-      } else if (name) {
-        product = await Product.findOne({ name: new RegExp(name, "i") });
+      } else if (name && typeof name === 'string') {
+        const safeName = escapeRegex(name, 200);
+        if (safeName) product = await Product.findOne({ name: new RegExp(safeName, "i") });
       }
       if (product) product.sold = 0; // umumiy bazadan topilganda sold=0
     }

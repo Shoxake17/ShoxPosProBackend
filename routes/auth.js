@@ -13,6 +13,8 @@ const express = require('express');
 const authController = require('../controllers/authController');
 const User = require('../models/User');
 const verifyToken = require('../middleware/verifyToken');
+const loginLimiter = require('../middleware/rateLimit');
+const { loginValidation, registerValidation, handleValidationErrors } = require('../middleware/validateAuth');
 
 // ✅ Factory pattern: csrfProtection tashqaridan uzatiladi
 module.exports = (csrfProtection) => {
@@ -25,18 +27,11 @@ module.exports = (csrfProtection) => {
   /**
    * @route POST /api/login
    * @description Foydalanuvchini tizimga kiritish - BLOKLANGAN USER TEKSHIRUVI BILAN
-   * @access Public
+   * @access Public (rate limited - credential stuffing oldini olish)
    */
-  router.post('/login', async (req, res) => {
+  router.post('/login', loginLimiter, loginValidation, handleValidationErrors, async (req, res) => {
     try {
       const { login, password } = req.body;
-
-      if (!login || !password) {
-        return res.status(400).json({
-          success: false,
-          message: "Login va parol majburiy"
-        });
-      }
 
       // 1. Foydalanuvchini topish
       const user = await User.findOne({
@@ -77,9 +72,9 @@ module.exports = (csrfProtection) => {
   /**
    * @route POST /api/register
    * @description Yangi foydalanuvchi ro'yxatdan o'tkazish (faqat admin)
-   * @access Public
+   * @access Protected (admin only)
    */
-  router.post('/register', async (req, res) => {
+  router.post('/register', verifyToken, authController.isAdmin, registerValidation, handleValidationErrors, async (req, res) => {
     try {
       await authController.register(req, res);
     } catch (error) {

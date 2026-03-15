@@ -174,12 +174,16 @@ exports.login = async (req, res) => {
     res.cookie('accessToken', accessToken, { ...cookieOptions, maxAge: 15 * 60 * 1000 });
     res.cookie('refreshToken', refreshToken, { ...cookieOptions, maxAge: 7 * 24 * 60 * 60 * 1000 });
 
+    // ✅ Session yaratish: refresh tokenni to'g'ri saqlash
     await UserSessionService.createSession({
       userId: user._id,
       deviceId,
       ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress,
       userAgent: req.headers['user-agent'],
-      refreshTokens: [{ tokenId: refreshTokenId, token: refreshToken, deviceId, createdAt: new Date() }]
+      refreshTokenId,
+      refreshToken,
+      deviceType,
+      deviceOS,
     });
 
     await AuditService.logUserAction({ login: user.login, action: 'LOGIN', status: 'SUCCESS' });
@@ -337,9 +341,9 @@ exports.kickDevice = async (req, res) => {
 // 👤 FOYDALANUVCHI BOSHQARUVI
 // ====================================================================
 exports.changePassword = async (req, res) => {
-  const { login, currentPassword, newPassword } = req.body;
+  const { currentPassword, newPassword } = req.body;
   try {
-    const normalizedLogin = (login || '').trim().toLowerCase();
+    const normalizedLogin = req.user.login;
     const user = await User.findOne({ login: normalizedLogin }).select('+password');
     if (!user) return res.status(404).json({ message: 'Foydalanuvchi topilmadi' });
     if (!user.password) return res.status(500).json({ message: 'Server xatosi: parol topilmadi' });
@@ -376,6 +380,9 @@ exports.confirmLogin = async (req, res) => {
   const { login, deviceId, deviceType = 'unknown', deviceOS = 'unknown', confirm } = req.body;
   try {
     const normalizedLogin = (login || '').trim().toLowerCase();
+    if (req.user.login !== normalizedLogin && req.user.role !== 'admin') {
+      return res.status(403).json({ message: "Ruxsat yo'q" });
+    }
     const user = await User.findOne({ login: normalizedLogin });
     if (!user) return res.status(404).json({ message: 'Foydalanuvchi topilmadi' });
     if (confirm) {

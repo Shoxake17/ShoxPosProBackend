@@ -5,6 +5,7 @@ const router = express.Router();
 const mongoose = require("mongoose");
 const Product = require("../models/Product");
 const fetch = require("node-fetch").default;
+const { escapeRegex, sanitizeString } = require("../utils/escapeRegex");
 
 // Dinamik products model
 function getProductModel(login) {
@@ -58,7 +59,10 @@ function getIncomingModel(login) {
 // 1. Yangi mahsulot qo'shish – products + incoming ga saqlash
 router.post("/add", async (req, res) => {
   try {
-    const { name, price, basePrice, barcode, category, quantity = 0, login } = req.body;
+    let { name, price, basePrice, barcode, category, quantity = 0, login } = req.body;
+    name = sanitizeString(name, 300);
+    category = sanitizeString(category, 200);
+    barcode = sanitizeString(String(barcode || ''), 100);
 
     if (!login || !barcode || !name || !category) {
       return res.status(400).json({ message: "Majburiy maydonlar to'ldirilmagan!" });
@@ -261,11 +265,14 @@ router.get("/search", async (req, res) => {
     const { q = "", category = "", login } = req.query;
 
     let filter = {};
-    if (q) {
-      filter.$or = [
-        { name: { $regex: q, $options: "i" } },
-        { barcode: { $regex: q, $options: "i" } }
-      ];
+    if (q && typeof q === 'string') {
+      const safeQ = escapeRegex(q, 200);
+      if (safeQ) {
+        filter.$or = [
+          { name: { $regex: safeQ, $options: "i" } },
+          { barcode: { $regex: safeQ, $options: "i" } }
+        ];
+      }
     }
     if (category) filter.category = category;
 

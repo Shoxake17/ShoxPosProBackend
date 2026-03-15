@@ -26,7 +26,7 @@ router.post('/setup', async (req, res) => {
     googleAuthEnabled: false 
   });
 
-  res.json({ qrCodeUrl, secret: secret.base32 });
+  res.json({ qrCodeUrl });
 });
 
 // Verify
