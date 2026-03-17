@@ -1,0 +1,36 @@
+name: Security Scan
+
+on:
+  push:
+    branches: [ main ]
+  schedule:
+    - cron: '0 0 * * *'   # Har kuni tungi full scan
+
+jobs:
+  zap_scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Run OWASP ZAP Baseline Scan
+        run: |
+          docker run --rm -v $(pwd):/zap/wrk/:rw owasp/zap2docker-stable zap-baseline.py \
+            -t http://your-app-url:8080 \
+            -r zap_report.html \
+            -J zap_report.json \
+            -m 5
+
+      - name: Check ZAP results
+        run: |
+          HIGH=$(jq '.site[0].alerts | map(select(.risk == "High")) | length' zap_report.json)
+          if [ "$HIGH" -gt 0 ]; then
+            echo "High severity vulnerabilities found!"
+            exit 1
+          fi
+
+      - name: Upload ZAP report
+        uses: actions/upload-artifact@v3
+        with:
+          name: zap-report
+          path: zap_report.html
