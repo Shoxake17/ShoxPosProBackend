@@ -26,7 +26,7 @@ jobs:
             -r zap_report.html \
             -J zap_report.json \
             -w zap.yaml \
-            -m 5
+            -m 5 || true
 
       # High severity zaifliklarni tekshirish
       - name: Check ZAP results
