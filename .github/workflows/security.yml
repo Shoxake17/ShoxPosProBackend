@@ -16,10 +16,11 @@ jobs:
       - name: Run OWASP ZAP Baseline Scan
         run: |
           docker run --rm -v $(pwd):/zap/wrk/:rw zaproxy/zap-stable \
-            zap-baseline.py -t http://localhost:3000 \
-            -r zap_report.html \
-            -J zap_report.json \
-            -m 5
+          zap-baseline.py -t http://localhost:3000 \
+          -r zap_report.html \
+          -J zap_report.json \
+          -w zap.yaml \
+          -m 5
 
       - name: Check ZAP results
         run: |
