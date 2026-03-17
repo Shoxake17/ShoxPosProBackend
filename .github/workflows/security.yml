@@ -18,11 +18,11 @@ jobs:
       - name: Fix permissions
         run: chmod -R 777 $GITHUB_WORKSPACE
 
-      # OWASP ZAP Baseline Scan
-      - name: Run OWASP ZAP Baseline Scan
+      # OWASP ZAP Full Scan
+      - name: Run OWASP ZAP Full Scan
         run: |
           docker run --rm -v $(pwd):/zap/wrk/:rw zaproxy/zap-stable \
-            zap-baseline.py -t https://shoxpospro.uz \
+            zap-full-scan.py -t https://shoxpospro.uz \
             -r zap_report.html \
             -J zap_report.json \
             -w zap.yaml \
