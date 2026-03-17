@@ -53,6 +53,7 @@ jobs:
           path: zap_report.json
 
       - name: Upload ZAP YAML plan
+        if: ${{ always() && hashFiles('zap.yaml') != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: zap-yaml-plan
