@@ -22,7 +22,7 @@ jobs:
             zap-baseline.py -t https://shoxpospro.uz \
             -r zap_report.html \
             -J zap_report.json \
-            -w /zap/wrk/zap.yaml \
+            -w zap.yaml \
             -m 5
 
       - name: Check ZAP results
