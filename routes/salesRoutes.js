@@ -1,6 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
+// 📈 Prometheus metrikalarini import qilamiz
+const { totalSales, totalCashbackGiven } = require('./metrics'); 
 
 // 🔹 Dinamik Product model
 function getProductModel(login) {
@@ -37,21 +39,24 @@ function getSalesModel(login) {
     basePrice: Number,
     category: String,
     total: Number,
+    paymentMethod: { type: String, default: 'cash' }, // To'lov turi uchun maydon
     soldAt: { type: Date, default: Date.now } 
   });
 
   return mongoose.model(modelName, schema, collectionName);
 }
 
-// ✅ Sotuvlarni saqlash - YANGILANGAN: Bir xil mahsulotlarni birlashtirib saqlash
+// ✅ Sotuvlarni saqlash - Metrikalar bilan integratsiya qilingan
 router.post('/sell-product/:login', async (req, res) => {
   try {
     const { login } = req.params;
-    const { sales } = req.body;
+    // To'lov turi va keshbek ma'lumotlarini body'dan olamiz
+    const { sales, paymentMethod, cashbackAmount } = req.body;
 
     console.log(`📥 ${login} uchun sotuv:`, {
       salesCount: sales?.length,
-      sales
+      paymentMethod,
+      cashbackAmount
     });
 
     if (!sales || !Array.isArray(sales) || sales.length === 0) {
@@ -66,6 +71,7 @@ router.post('/sell-product/:login', async (req, res) => {
 
     const savedSales = [];
     const currentDate = new Date();
+    const pMethod = paymentMethod || 'cash'; // Default to'lov turi
 
     for (const item of sales) {
       const { barcode, name, quantity, price, category, total } = item;
@@ -77,14 +83,13 @@ router.post('/sell-product/:login', async (req, res) => {
         });
       }
 
-      // 1️⃣ PRODUCTS-LOGIN: quantity kamayadi, sold oshadi
+      // 1️⃣ PRODUCT yangilash
       const product = await Product.findOne({ barcode });
       
       if (product) {
         product.quantity = Math.max(0, product.quantity - quantity);
         product.sold = (product.sold || 0) + quantity;
         await product.save();
-        console.log(`✅ Product yangilandi: ${name} (qoldiq: ${product.quantity})`);
       } else {
         await Product.create({
           barcode,
@@ -95,30 +100,25 @@ router.post('/sell-product/:login', async (req, res) => {
           basePrice: item.basePrice || 0,
           category: category || ""
         });
-        console.log(`✅ Yangi product yaratildi: ${name}`);
       }
 
-      // 2️⃣ SALES-LOGIN: Bugungi sotuvni tekshirish
+      // 2️⃣ SALE saqlash (Bugungi sotuvni birlashtirish)
       const todayStart = new Date(currentDate.setHours(0, 0, 0, 0));
       const todayEnd = new Date(currentDate.setHours(23, 59, 59, 999));
 
-      // Bugun shu barcode bilan sotuv bor yoki yo'q tekshirish
       const existingSale = await Sales.findOne({
         barcode: barcode,
+        paymentMethod: pMethod, // To'lov turi bo'yicha ajratish
         soldAt: { $gte: todayStart, $lte: todayEnd }
       });
 
       if (existingSale) {
-        // Agar bugun sotilgan bo'lsa, sonini qo'shamiz
         existingSale.quantity += quantity;
         existingSale.total = existingSale.quantity * price;
-        existingSale.soldAt = new Date(); // Vaqtni yangilaymiz
+        existingSale.soldAt = new Date();
         await existingSale.save();
-        
         savedSales.push(existingSale);
-        console.log(`✅ Sale yangilandi: ${name} x${existingSale.quantity} (umumiy)`);
       } else {
-        // Yangi sotuv yaratamiz
         const saleRecord = await Sales.create({
           barcode,
           name,
@@ -127,15 +127,20 @@ router.post('/sell-product/:login', async (req, res) => {
           basePrice: product?.basePrice || item.basePrice || 0,
           category: category || "",
           total: total || (price * quantity),
+          paymentMethod: pMethod,
           soldAt: new Date()
         });
-
         savedSales.push(saleRecord);
-        console.log(`✅ Yangi sale saqlandi: ${name} x${quantity}`);
       }
+
+      // 📈 PROMETHEUS: Har bir mahsulot savdosi uchun hisoblagichni oshirish
+      totalSales.labels({ payment_type: pMethod }).inc();
     }
 
-    console.log(`🎉 ${login} uchun jami ${savedSales.length} ta sotuv saqlandi`);
+    // 💰 PROMETHEUS: Agar keshbek berilgan bo'lsam, summani qo'shish
+    if (cashbackAmount && typeof cashbackAmount === 'number') {
+      totalCashbackGiven.inc(cashbackAmount);
+    }
 
     res.json({ 
       success: true,
@@ -154,24 +159,15 @@ router.post('/sell-product/:login', async (req, res) => {
   }
 });
 
-// ✅ Sotuvlarni olish - sales-login papkadan
+// ✅ Sotuvlarni olish
 router.get('/sales/:login', async (req, res) => {
   try {
     const { login } = req.params;
-    
-
     const Sales = getSalesModel(login);
     const reports = await Sales.find().sort({ soldAt: -1 }).lean();
-    
-    
     res.json(reports);
-
   } catch (err) {
-    console.error('❌ Sotuvlarni yuklashda xato:', err);
-    res.status(500).json({ 
-      success: false, 
-      error: 'Sotuvlarni yuklashda xatolik yuz berdi' 
-    });
+    res.status(500).json({ success: false, error: 'Sotuvlarni yuklashda xatolik' });
   }
 });
 
@@ -180,27 +176,17 @@ router.get('/sales/:login/by-date', async (req, res) => {
   try {
     const { login } = req.params;
     const { startDate, endDate } = req.query;
-
     const Sales = getSalesModel(login);
-    
     const query = {};
-    
     if (startDate || endDate) {
       query.soldAt = {};
       if (startDate) query.soldAt.$gte = new Date(startDate);
       if (endDate) query.soldAt.$lte = new Date(endDate);
     }
-
     const reports = await Sales.find(query).sort({ soldAt: -1 }).lean();
-    
     res.json(reports);
-
   } catch (err) {
-    console.error('❌ Sana bo\'yicha sotuvlarni yuklashda xato:', err);
-    res.status(500).json({ 
-      success: false, 
-      error: err.message 
-    });
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
@@ -209,27 +195,13 @@ router.get('/sales/:login/stats', async (req, res) => {
   try {
     const { login } = req.params;
     const Sales = getSalesModel(login);
-
     const stats = await Sales.aggregate([
-      {
-        $group: {
-          _id: '$category',
-          totalSales: { $sum: '$total' },
-          totalQuantity: { $sum: '$quantity' },
-          count: { $sum: 1 }
-        }
-      },
+      { $group: { _id: '$category', totalSales: { $sum: '$total' }, totalQuantity: { $sum: '$quantity' }, count: { $sum: 1 } } },
       { $sort: { totalSales: -1 } }
     ]);
-
     res.json(stats);
-
   } catch (err) {
-    console.error('❌ Statistikani yuklashda xato:', err);
-    res.status(500).json({ 
-      success: false, 
-      error: err.message 
-    });
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
@@ -238,27 +210,11 @@ router.delete('/sales/:login/:id', async (req, res) => {
   try {
     const { login, id } = req.params;
     const Sales = getSalesModel(login);
-
     const deleted = await Sales.findByIdAndDelete(id);
-    
-    if (!deleted) {
-      return res.status(404).json({ 
-        success: false, 
-        error: 'Sotuv topilmadi' 
-      });
-    }
-
-    res.json({ 
-      success: true, 
-      message: 'Sotuv o\'chirildi' 
-    });
-
+    if (!deleted) return res.status(404).json({ success: false, error: 'Sotuv topilmadi' });
+    res.json({ success: true, message: 'Sotuv o\'chirildi' });
   } catch (err) {
-    console.error('❌ Sotuvni o\'chirishda xato:', err);
-    res.status(500).json({ 
-      success: false, 
-      error: err.message 
-    });
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
