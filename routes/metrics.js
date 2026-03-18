@@ -24,7 +24,7 @@ router.use((req, res, next) => {
 });
 
 // Metrics endpoint
-router.get('/metrics', async (req, res) => {
+router.get('/', async (req, res) => {
   res.set('Content-Type', client.register.contentType);
   res.end(await client.register.metrics());
 });
