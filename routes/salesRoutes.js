@@ -8,9 +8,7 @@ const { totalSales, totalCashbackGiven } = require('./metrics');
 function getProductModel(login) {
   const collectionName = `products_${login}`;
   const modelName = `Product_${login}`;
-  
   if (mongoose.models[modelName]) return mongoose.models[modelName];
-
   const schema = new mongoose.Schema({
     name: String,
     barcode: String,
@@ -20,7 +18,6 @@ function getProductModel(login) {
     quantity: Number,
     sold: { type: Number, default: 0 }
   });
-
   return mongoose.model(modelName, schema, collectionName);
 }
 
@@ -28,9 +25,7 @@ function getProductModel(login) {
 function getSalesModel(login) {
   const collectionName = `sales_${login}`;
   const modelName = `Sale_${login}`;
-  
   if (mongoose.models[modelName]) return mongoose.models[modelName];
-
   const schema = new mongoose.Schema({
     barcode: String,
     name: String,
@@ -39,76 +34,55 @@ function getSalesModel(login) {
     basePrice: Number,
     category: String,
     total: Number,
-    paymentMethod: { type: String, default: 'cash' }, // To'lov turi uchun maydon
+    paymentMethod: { type: String, default: 'cash' },
     soldAt: { type: Date, default: Date.now } 
   });
-
   return mongoose.model(modelName, schema, collectionName);
 }
 
-// ✅ Sotuvlarni saqlash - Metrikalar bilan integratsiya qilingan
+// ✅ Sotuvlarni saqlash - To'liq Monitoring bilan
 router.post('/sell-product/:login', async (req, res) => {
   try {
     const { login } = req.params;
-    // To'lov turi va keshbek ma'lumotlarini body'dan olamiz
     const { sales, paymentMethod, cashbackAmount } = req.body;
 
-    console.log(`📥 ${login} uchun sotuv:`, {
-      salesCount: sales?.length,
-      paymentMethod,
-      cashbackAmount
-    });
-
     if (!sales || !Array.isArray(sales) || sales.length === 0) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Sales bo\'sh yoki noto\'g\'ri formatda'
-      });
+      return res.status(400).json({ success: false, message: 'Sales bo\'sh yoki noto\'g\'ri formatda' });
     }
 
     const Product = getProductModel(login);
     const Sales = getSalesModel(login);
-
     const savedSales = [];
     const currentDate = new Date();
-    const pMethod = paymentMethod || 'cash'; // Default to'lov turi
+    const pMethod = paymentMethod || 'cash';
 
     for (const item of sales) {
       const { barcode, name, quantity, price, category, total } = item;
 
       if (!barcode || !name || typeof quantity !== "number") {
-        return res.status(400).json({ 
-          success: false,
-          message: "Noto'g'ri ma'lumot formatida" 
-        });
+        return res.status(400).json({ success: false, message: "Noto'g'ri ma'lumot formatida" });
       }
 
       // 1️⃣ PRODUCT yangilash
       const product = await Product.findOne({ barcode });
-      
       if (product) {
         product.quantity = Math.max(0, product.quantity - quantity);
         product.sold = (product.sold || 0) + quantity;
         await product.save();
       } else {
         await Product.create({
-          barcode,
-          name,
-          quantity: 0,
-          sold: quantity,
-          price: price || 0,
-          basePrice: item.basePrice || 0,
-          category: category || ""
+          barcode, name, quantity: 0, sold: quantity,
+          price: price || 0, basePrice: item.basePrice || 0, category: category || ""
         });
       }
 
-      // 2️⃣ SALE saqlash (Bugungi sotuvni birlashtirish)
+      // 2️⃣ SALE saqlash
       const todayStart = new Date(currentDate.setHours(0, 0, 0, 0));
       const todayEnd = new Date(currentDate.setHours(23, 59, 59, 999));
 
       const existingSale = await Sales.findOne({
         barcode: barcode,
-        paymentMethod: pMethod, // To'lov turi bo'yicha ajratish
+        paymentMethod: pMethod,
         soldAt: { $gte: todayStart, $lte: todayEnd }
       });
 
@@ -120,10 +94,7 @@ router.post('/sell-product/:login', async (req, res) => {
         savedSales.push(existingSale);
       } else {
         const saleRecord = await Sales.create({
-          barcode,
-          name,
-          quantity,
-          price,
+          barcode, name, quantity, price,
           basePrice: product?.basePrice || item.basePrice || 0,
           category: category || "",
           total: total || (price * quantity),
@@ -133,11 +104,15 @@ router.post('/sell-product/:login', async (req, res) => {
         savedSales.push(saleRecord);
       }
 
-      // 📈 PROMETHEUS: Har bir mahsulot savdosi uchun hisoblagichni oshirish
-      totalSales.labels({ payment_type: pMethod }).inc();
+      // 📈 PROMETHEUS: Har bir mahsulot uchun login va to'lov turi bo'yicha hisoblash
+      // BU YERDA: Tsikl ichida har bir mahsulotni alohida sanaymiz
+      totalSales.labels({ 
+        payment_type: pMethod, 
+        login: login 
+      }).inc();
     }
 
-    // 💰 PROMETHEUS: Agar keshbek berilgan bo'lsam, summani qo'shish
+    // 💰 KESHBEK MONITORINGI
     if (cashbackAmount && typeof cashbackAmount === 'number') {
       totalCashbackGiven.inc(cashbackAmount);
     }
@@ -151,15 +126,11 @@ router.post('/sell-product/:login', async (req, res) => {
 
   } catch (err) {
     console.error("❌ Sell-product xatosi:", err);
-    res.status(500).json({ 
-      success: false,
-      message: "Server xatosi",
-      error: err.message
-    });
+    res.status(500).json({ success: false, message: "Server xatosi", error: err.message });
   }
 });
 
-// ✅ Sotuvlarni olish
+// ✅ Boshqa GET/DELETE route'lari (o'zgarishsiz qoladi)
 router.get('/sales/:login', async (req, res) => {
   try {
     const { login } = req.params;
@@ -171,7 +142,6 @@ router.get('/sales/:login', async (req, res) => {
   }
 });
 
-// ✅ Sana bo'yicha sotuvlarni olish
 router.get('/sales/:login/by-date', async (req, res) => {
   try {
     const { login } = req.params;
@@ -190,7 +160,6 @@ router.get('/sales/:login/by-date', async (req, res) => {
   }
 });
 
-// ✅ Kategoriya bo'yicha statistika
 router.get('/sales/:login/stats', async (req, res) => {
   try {
     const { login } = req.params;
@@ -205,7 +174,6 @@ router.get('/sales/:login/stats', async (req, res) => {
   }
 });
 
-// ✅ Sotuvni o'chirish
 router.delete('/sales/:login/:id', async (req, res) => {
   try {
     const { login, id } = req.params;

@@ -28,7 +28,7 @@ const activeRequests = new client.Gauge({
 const totalSales = new client.Counter({
     name: 'shoxpos_sales_total',
     help: 'Jami amalga oshirilgan savdolar soni',
-    labelNames: ['payment_type'] // cash, card, shoxpay
+    labelNames: ['payment_type', 'login'] 
 });
 
 // 5. BUSINESS METRIC: Keshbek miqdori
