@@ -1,32 +1,41 @@
-name: Deploy Backends
+name: CI/CD Pipeline - ShoxPosPro Backend
 
 on:
   push:
     branches: [ main ]
+  schedule:
+    - cron: '0 0 * * *' # Har kuni tungi full security scan
 
 jobs:
+  # 1. Build va Push bosqichi
   build-and-push:
+    name: Build and Push Docker Image
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Login to GHCR
-        run: |
-          echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_PAT }}
 
+      - name: Build and Push Backend Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ghcr.io/shoxake17/shoxposprobackend:latest
 
-      - name: Build Backend Image
-        run: docker build -t ghcr.io/shoxake17/shoxposprobackend:latest .
-
-      - name: Push Backend Image
-        run: docker push ghcr.io/shoxake17/shoxposprobackend:latest
-
+  # 2. Deploy bosqichi (Faqat build muvaffaqiyatli bo'lsa)
   deploy:
+    name: Deploy to VPS
     runs-on: ubuntu-latest
     needs: build-and-push
     steps:
-      - name: Deploy to VPS
+      - name: Deploy via SSH
         uses: appleboy/ssh-action@v0.1.7
         with:
           host: ${{ secrets.SERVER_HOST }}
@@ -34,5 +43,46 @@ jobs:
           key: ${{ secrets.OWASP_ZAP_SSH_KEY }}
           script: |
             cd ~/shoxpospro
+            docker login ghcr.io -u ${{ github.actor }} -p ${{ secrets.GHCR_PAT }}
             docker-compose pull backend
             docker-compose up -d --no-deps --force-recreate backend
+            docker logout ghcr.io
+
+  # 3. Security Scan (Deploy-dan keyin real saytni tekshiradi)
+  security_scan:
+    name: OWASP ZAP Security Scan
+    runs-on: ubuntu-latest
+    needs: deploy
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Fix workspace permissions
+        run: chmod -R 777 $GITHUB_WORKSPACE
+
+      - name: Run OWASP ZAP Full Scan
+        run: |
+          docker run --rm -v $(pwd):/zap/wrk/:rw zaproxy/zap-stable \
+            zap-full-scan.py -t https://shoxpospro.uz \
+            -r zap_report.html \
+            -J zap_report.json \
+            -m 5 || true
+
+      - name: Check for High Vulnerabilities
+        run: |
+          HIGH=$(jq '.site[0].alerts | map(select(.risk == "High")) | length' zap_report.json)
+          if [ "$HIGH" -gt 0 ]; then
+            echo "❌ CRITICAL: $HIGH high severity vulnerabilities found!"
+            exit 1
+          else
+            echo "✅ No high severity vulnerabilities found."
+          fi
+
+      - name: Upload Security Reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: zap-security-reports
+          path: |
+            zap_report.html
+            zap_report.json
