@@ -3,19 +3,19 @@ const client = require('prom-client');
 
 const router = express.Router();
 
-// 1. Standart metrikalarni yoqish (CPU, Memory, Event Loop delay)
+// 1. Standart metrikalarni yoqish
 const register = client.register;
 client.collectDefaultMetrics({
     register,
-    prefix: 'shoxpos_node_', // Barcha standart metrikalarga prefiks beradi
+    prefix: 'shoxpos_node_',
 });
 
-// 2. HTTP so'rovlar davomiyligi (Siz yozgan kod, biroz optimallashgan)
+// 2. HTTP so'rovlar davomiyligi
 const httpRequestDuration = new client.Histogram({
     name: 'http_request_duration_seconds',
     help: 'HTTP soʻrovlarining davomiyligi (sekundda)',
     labelNames: ['method', 'route', 'status_code'],
-    buckets: [0.1, 0.3, 0.5, 1, 1.5, 2, 5] // Javob berish vaqti chegaralari
+    buckets: [0.1, 0.3, 0.5, 1, 1.5, 2, 5]
 });
 
 // 3. ACTIVE USERS: Hozirda ishlov berilayotgan so'rovlar
@@ -24,26 +24,36 @@ const activeRequests = new client.Gauge({
     help: 'Hozirgi vaqtda serverda ishlanayotgan soʻrovlar soni'
 });
 
-// 4. BUSINESS METRIC: Savdolar soni (ShoxPosPro uchun)
+// 4. BUSINESS METRIC: Savdolar soni
 const totalSales = new client.Counter({
     name: 'shoxpos_sales_total',
     help: 'Jami amalga oshirilgan savdolar soni',
     labelNames: ['payment_type'] // cash, card, shoxpay
 });
 
-// 5. BUSINESS METRIC: Keshbek miqdori (ShoxPay uchun)
+// 5. BUSINESS METRIC: Keshbek miqdori
 const totalCashbackGiven = new client.Counter({
     name: 'shoxpay_cashback_given_total',
     help: 'Mijozlarga berilgan jami keshbek miqdori'
 });
 
+// ==========================================
+// 🚀 MUHIM: METRIKALARNI INITIALIZE QILISH
+// Bu qism Grafanada "No Data" xatosini yo'qotadi
+// ==========================================
+totalSales.labels({ payment_type: 'cash' }).inc(0);
+totalSales.labels({ payment_type: 'card' }).inc(0);
+totalSales.labels({ payment_type: 'shoxpay' }).inc(0);
+totalCashbackGiven.inc(0);
+activeRequests.set(0);
+
 // Middleware: Har bir so'rovni o'lchash
 router.use((req, res, next) => {
-    activeRequests.inc(); // So'rov boshlandi
+    activeRequests.inc();
     const end = httpRequestDuration.startTimer();
 
     res.on('finish', () => {
-        activeRequests.dec(); // So'rov tugadi
+        activeRequests.dec();
         end({ 
             method: req.method, 
             route: req.baseUrl + (req.route ? req.route.path : req.path), 
@@ -63,7 +73,6 @@ router.get('/', async (req, res) => {
     }
 });
 
-// Tashqaridan foydalanish uchun eksport qilish
 module.exports = {
     router,
     totalSales,
