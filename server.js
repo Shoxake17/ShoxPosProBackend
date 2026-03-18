@@ -136,7 +136,8 @@ const biometricRouter = require('./routes/biometricRoutes');
 const printerRoutes = require('./routes/printerRoutes')(io);
 const authenticatorRouter = require('./routes/authenticatorRoutes');
 const adminRoutes = require('./routes/adminRoutes');
-
+const metricsRouter = require('./routes/metrics');
+app.use('/', metricsRouter);
 app.use('/api', authRouter);
 app.use('/api', biometricRouter);
 app.use('/api/google-auth', authenticatorRouter);
