@@ -38,7 +38,6 @@ const allowedOrigins = [
   'http://localhost:8081',
   'http://localhost:19006',
   'http://0.0.0.0:8081',
-  'https://shoxpospro-6os2.onrender.com'
 ];
 
 app.use(cors({
