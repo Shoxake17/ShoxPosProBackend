@@ -13,6 +13,7 @@ const express = require('express');
 const authController = require('../controllers/authController');
 const User = require('../models/User');
 const verifyToken = require('../middleware/verifyToken');
+const { authLimiter } = require('../middleware/apiRateLimit');
 const loginLimiter = require('../middleware/rateLimit');
 const { loginValidation, registerValidation, handleValidationErrors } = require('../middleware/validateAuth');
 
@@ -29,7 +30,7 @@ module.exports = (csrfProtection) => {
    * @description Foydalanuvchini tizimga kiritish - BLOKLANGAN USER TEKSHIRUVI BILAN
    * @access Public (rate limited - credential stuffing oldini olish)
    */
-  router.post('/login', loginLimiter, loginValidation, handleValidationErrors, async (req, res) => {
+  router.post('/login', authLimiter, loginValidation, handleValidationErrors, async (req, res) => {
     try {
       const { login, password } = req.body;
 

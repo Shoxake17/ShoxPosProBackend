@@ -106,10 +106,14 @@ app.get('/api/csrf-token', csrfProtection, (req, res) => {
   res.json({ csrfToken: req.csrfToken() });
 });
 
-// ====================================
-// 🛡️ GLOBAL API RATE LIMIT (DoS/DDoS)
-// ====================================
-const apiLimiter = require('./middleware/apiRateLimit');
+
+// 🛡️ GLOBAL API RATE LIMIT
+const { authLimiter, apiLimiter } = require('./middleware/apiRateLimit');
+
+// 1. Auth yo'llari uchun qattiq limit (Login, Register va h.k.)
+app.use('/api/auth', authLimiter);
+
+// 2. Qolgan barcha /api/* yo'llari uchun yumshoq limit
 app.use('/api', apiLimiter);
 
 // ====================================
