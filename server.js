@@ -128,6 +128,7 @@ app.use((req, res, next) => {
 // 🛣️ ROUTERLAR
 // ====================================
 const loginLimiter = require('./middleware/rateLimit');
+
 const productRoutes = require("./routes/productRoutes");
 const loginProductRoutes = require("./routes/loginProducts");
 const scanProductsRouter = require("./routes/scanProducts");
@@ -141,7 +142,7 @@ const authenticatorRouter = require('./routes/authenticatorRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const { router: metricsRouter } = require('./routes/metrics'); 
 app.use('/metrics', metricsRouter);
-app.use('/api', authRouter);
+app.use('/api/auth', authRouter);
 app.use('/api', biometricRouter);
 app.use('/api/google-auth', authenticatorRouter);
 app.use('/api', aiRoutes);
