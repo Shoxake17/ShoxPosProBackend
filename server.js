@@ -107,6 +107,12 @@ app.get('/api/csrf-token', csrfProtection, (req, res) => {
 });
 
 // ====================================
+// 🛡️ GLOBAL API RATE LIMIT (DoS/DDoS)
+// ====================================
+const apiLimiter = require('./middleware/apiRateLimit');
+app.use('/api', apiLimiter);
+
+// ====================================
 // 📝 LOGGING
 // ====================================
 app.use((req, res, next) => {
@@ -114,26 +120,15 @@ app.use((req, res, next) => {
   next();
 });
 
-// 🛡️ GLOBAL API RATE LIMIT
-const { authLimiter, apiLimiter } = require('./middleware/apiRateLimit');
-
-// 1. Auth yo'llari uchun qattiq limit (Login, Register va h.k.)
-app.use('/api/auth', authLimiter);
-
-// 2. Qolgan barcha /api/* yo'llari uchun yumshoq limit
-app.use('/api', apiLimiter);
-
-
-
 // ====================================
 // 🛣️ ROUTERLAR
 // ====================================
-const authRouter = require('./routes/auth')(csrfProtection);
 const loginLimiter = require('./middleware/rateLimit');
 const productRoutes = require("./routes/productRoutes");
 const loginProductRoutes = require("./routes/loginProducts");
 const scanProductsRouter = require("./routes/scanProducts");
 const aiRoutes = require('./routes/aiRoutes');
+const authRouter = require('./routes/auth')(csrfProtection);
 const debtsRoutes = require('./routes/debts');
 const salesRoutes = require('./routes/salesRoutes');
 const biometricRouter = require('./routes/biometricRoutes');
@@ -141,9 +136,8 @@ const printerRoutes = require('./routes/printerRoutes')(io);
 const authenticatorRouter = require('./routes/authenticatorRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const { router: metricsRouter } = require('./routes/metrics'); 
-
-// ROUTERLARNI ULANISHI
-app.use('/api/auth', authRouter);
+app.use('/metrics', metricsRouter);
+app.use('/api', authRouter);
 app.use('/api', biometricRouter);
 app.use('/api/google-auth', authenticatorRouter);
 app.use('/api', aiRoutes);
@@ -155,7 +149,6 @@ app.use('/api', debtsRoutes);
 app.use('/api', salesRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/cashback', cashbackProxy);
-app.use('/metrics', metricsRouter);
 
 initIO(io);
 console.log("✅ Barcha routerlar ulandi");
