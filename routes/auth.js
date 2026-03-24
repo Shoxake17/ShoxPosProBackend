@@ -40,7 +40,7 @@ module.exports = (csrfProtection) => {
       }).select('+password');
 
       if (!user) {
-        return res.status(404).json({
+        return res.status(401).json({
           success: false,
           message: "Login yoki parol noto'g'ri"
         });
