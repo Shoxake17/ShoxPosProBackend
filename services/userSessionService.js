@@ -1,10 +1,5 @@
 const UserSession = require('../models/UserSession');
 
-/**
- * Yangi sessiya yaratish yoki mavjudini yangilash.
- * refreshTokenId / refreshToken kelsa, ularni refreshTokens massiviga to'liq
- * ma'lumot (tokenId, token, deviceId, deviceType, deviceOS, createdAt) bilan qo'shadi.
- */
 exports.createSession = async ({
   userId,
   deviceId,
@@ -16,30 +11,32 @@ exports.createSession = async ({
   deviceOS,
 }) => {
   try {
-    let session = await UserSession.findOne({ userId, deviceId });
-    if (!session) {
-      session = new UserSession({
-        userId,
-        deviceId,
+    const updateData = {
+      $set: {
         ip: ip || null,
         userAgent: userAgent || null,
-        refreshTokens: [],
-      });
-    }
+        updatedAt: new Date(),
+      },
+    };
 
     if (refreshTokenId && refreshToken) {
-      session.refreshTokens.push({
-        tokenId: refreshTokenId,
-        token: refreshToken,
-        deviceId,
-        deviceType: deviceType || 'Unknown',
-        deviceOS: deviceOS || 'Unknown',
-        createdAt: new Date(),
-      });
+      updateData.$push = {
+        refreshTokens: {
+          tokenId: refreshTokenId,
+          token: refreshToken,
+          deviceId,
+          deviceType: deviceType || 'Unknown',
+          deviceOS: deviceOS || 'Unknown',
+          createdAt: new Date(),
+        },
+      };
     }
 
-    session.updatedAt = new Date();
-    await session.save();
+    await UserSession.findOneAndUpdate(
+      { userId, deviceId },
+      updateData,
+      { upsert: true, new: true }
+    );
   } catch (err) {
     console.error('❌ createSession xatosi:', err);
     throw err;
@@ -67,10 +64,6 @@ exports.getSession = async (userId, deviceId) => {
   }
 };
 
-/**
- * Eski refreshToken ni yangisiga almashtirish.
- * Agar sessiya topilmasa, yangi sessiya yaratadi.
- */
 exports.rotateRefreshToken = async ({
   userId,
   deviceId,
@@ -78,31 +71,39 @@ exports.rotateRefreshToken = async ({
   newToken,
 }) => {
   try {
-    let session = await UserSession.findOne({ userId, deviceId });
+    // 1) Sessiya mavjudligini tekshir
+    const session = await UserSession.findOne({ userId, deviceId });
 
     if (!session) {
+      // Sessiya yo'q — yangi yarat
       if (!newToken) return;
-      session = new UserSession({
+      await UserSession.create({
         userId,
         deviceId,
         refreshTokens: [newToken],
+        updatedAt: new Date(),
       });
-      await session.save();
       return;
     }
 
+    // 2) Eski tokenni atomic o'chir
     if (oldTokenId) {
-      session.refreshTokens = (session.refreshTokens || []).filter(
-        (rt) => rt.tokenId !== oldTokenId,
+      await UserSession.findOneAndUpdate(
+        { userId, deviceId },
+        { $pull: { refreshTokens: { tokenId: oldTokenId } } }
       );
     }
 
+    // 3) Yangi tokenni atomic qo'sh
     if (newToken) {
-      session.refreshTokens.push(newToken);
+      await UserSession.findOneAndUpdate(
+        { userId, deviceId },
+        {
+          $push: { refreshTokens: newToken },
+          $set: { updatedAt: new Date() },
+        }
+      );
     }
-
-    session.updatedAt = new Date();
-    await session.save();
   } catch (err) {
     console.error('❌ rotateRefreshToken xatosi:', err);
     throw err;

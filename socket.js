@@ -30,6 +30,7 @@ function initIO(socketIO) {
 
     const authLogin = socket.handshake.auth?.login;
     const authDeviceId = socket.handshake.auth?.deviceId;
+
     if (authLogin) {
       _registerSocket(socket.id, authLogin, authDeviceId || null);
       console.log(`${authLogin} handshake orqali royxatga olindi`);
@@ -37,11 +38,18 @@ function initIO(socketIO) {
 
     socket.on('registerUser', ({ login, deviceId }) => {
       if (!login) return;
+
+      // ✅ deviceId yo'q bo'lsa handshake dan ol
+      const resolvedDeviceId = deviceId || socket.handshake.auth?.deviceId || null;
+
       if (userSockets[login]) {
-        userSockets[login] = userSockets[login].filter(s => s.deviceId !== deviceId);
+        userSockets[login] = userSockets[login].filter(
+          s => s.deviceId !== resolvedDeviceId
+        );
       }
-      _registerSocket(socket.id, login, deviceId || null);
-      console.log(`${login} | deviceId: ${deviceId} | socket: ${socket.id}`);
+
+      _registerSocket(socket.id, login, resolvedDeviceId);
+      console.log(`${login} | deviceId: ${resolvedDeviceId} | socket: ${socket.id}`);
     });
 
     socket.on('userLogged', (user) => {
@@ -67,7 +75,8 @@ function initIO(socketIO) {
       console.log(`Socket uzildi: ${socket.id}`);
       _removeSocket(socket.id);
       activeUsers = activeUsers.map(u => {
-        const hasActiveSockets = userSockets[u.login] && userSockets[u.login].length > 0;
+        const hasActiveSockets =
+          userSockets[u.login] && userSockets[u.login].length > 0;
         if (hasActiveSockets) return u;
         return { ...u, active: false, lastActive: new Date().toLocaleString() };
       });

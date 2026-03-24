@@ -22,8 +22,8 @@ module.exports = {
   
   // Login bo'yicha dinamik model yaratish
   getSaleModel: (login) => {
-    const collectionName = `sales-${login}`; // Masalan: sales-shoxrux
-    const modelName = `Sale_${login}`; // Model nomi: Sale_shoxrux
+    const collectionName = `sales-${login}`; 
+    const modelName = `Sale_${login}`;
     
     // Agar model allaqachon mavjud bo'lsa, uni qaytaradi
     if (mongoose.models[modelName]) {
