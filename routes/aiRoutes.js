@@ -235,7 +235,7 @@ router.post('/ask-openai', async (req, res) => {
   }
 });
 
-// ─── Groq ─────────────────────────────────────────────────────────────────────
+// ─── Groqs ─────────────────────────────────────────────────────────────────────
 router.post('/ask-groq-ai', async (req, res) => {
   const { question, login, systemOverride, useStore, groqModel } = req.body;
   if (!question) return res.status(400).json({ error: 'Savol kiritilmagan' });
