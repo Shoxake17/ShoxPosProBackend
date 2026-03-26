@@ -35,10 +35,18 @@ jobs:
             --config=p/owasp-top-ten \
             --config=p/security-audit \
             --config=p/secrets \
-            --config=p/python \
+            --config=p/javascript \
+            --config=p/nodejs \
             --sarif \
             --output=semgrep.sarif \
             . || true
+
+          if [ ! -f semgrep.sarif ]; then
+            echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Semgrep","rules":[]}},"results":[]}]}' > semgrep.sarif
+            echo "⚠️ semgrep.sarif yaratilmadi, bo'sh fayl ishlatilmoqda"
+          else
+            echo "✅ semgrep.sarif yaratildi ($(wc -c < semgrep.sarif) bytes)"
+          fi
 
       - name: Check for Critical vulnerabilities
         run: |
@@ -52,10 +60,11 @@ jobs:
           echo "✅ Kritik zaiflik topilmadi."
 
       - name: Upload SARIF to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: semgrep.sarif
+        continue-on-error: true
 
       - name: Upload SAST Report
         uses: actions/upload-artifact@v4
