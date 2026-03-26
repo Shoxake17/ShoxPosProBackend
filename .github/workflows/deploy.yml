@@ -9,7 +9,7 @@ on:
 
 jobs:
   # ─────────────────────────────────────────
-  # 1. SAST — Har push'da ishga tushadi
+  # 1. SAST — Har push'da ishga tushadimi
   # ─────────────────────────────────────────
   sast:
     name: SAST - Semgrep
