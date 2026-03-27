@@ -2,33 +2,75 @@ const express = require("express");
 const router = express.Router();
 const mongoose = require("mongoose");
 
-// 🔹 Dinamik model yaratish (login asosida)
-function getProductModel(login) {
-  const collectionName = `products_${login}`;
-  const modelName = `Product_${login}`;
-  
+// ====================================================================
+// 🛡️ SANITIZERS
+// ====================================================================
+function sanitizeLogin(value) {
+  if (!value || typeof value !== 'string') throw new Error("login noto'g'ri");
+  // ✅ Collection nomiga tushadigan login — faqat xavfsiz belgilar
+  if (!/^[a-zA-Z0-9_]{1,32}$/.test(value)) throw new Error("login formati noto'g'ri");
+  return value.toLowerCase().trim();
+}
+
+function sanitizeBarcode(value) {
+  if (!value || typeof value !== 'string') throw new Error("barcode noto'g'ri");
+  if (!/^[a-zA-Z0-9\-_]{1,64}$/.test(value)) throw new Error("barcode formati noto'g'ri");
+  return value.trim();
+}
+
+function sanitizeNumber(value, field = 'field') {
+  const num = Number(value);
+  if (isNaN(num) || num < 0) throw new Error(`${field} musbat son bo'lishi kerak`);
+  return num;
+}
+
+function sanitizeCategory(value) {
+  if (!value || typeof value !== 'string') return '';
+  if (/\$/.test(value)) throw new Error("category da noto'g'ri belgi");
+  return value.trim().slice(0, 64);
+}
+
+function sanitizeName(value) {
+  if (!value || typeof value !== 'string') return 'Nomsiz mahsulot';
+  if (/\$/.test(value)) throw new Error("name da noto'g'ri belgi");
+  return value.trim().slice(0, 128);
+}
+
+// ====================================================================
+// 🔹 Dinamik model — faqat sanitizatsiyadan o'tgan login
+// ====================================================================
+function getProductModel(safeLogin) {
+  const collectionName = `products_${safeLogin}`;
+  const modelName = `Product_${safeLogin}`;
+
   if (mongoose.models[modelName]) return mongoose.models[modelName];
 
   const schema = new mongoose.Schema({
-    name: String,
-    barcode: String,
+    name:      String,
+    barcode:   String,
     basePrice: Number,
-    price: Number,
-    category: String,
-    quantity: Number,
-    sold: { type: Number, default: 0 }
+    price:     Number,
+    category:  String,
+    quantity:  Number,
+    sold:      { type: Number, default: 0 }
   });
 
   return mongoose.model(modelName, schema, collectionName);
 }
 
-// ================== PRODUCTS ==================
-
-// Foydalanuvchiga tegishli mahsulotlarni olish
+// ====================================================================
+// GET /products/:login
+// ====================================================================
 router.get("/products/:login", async (req, res) => {
+  let safeLogin;
   try {
-    const { login } = req.params;
-    const Product = getProductModel(login);
+    safeLogin = sanitizeLogin(req.params.login);
+  } catch (e) {
+    return res.status(400).json({ message: e.message });
+  }
+
+  try {
+    const Product = getProductModel(safeLogin);
     const products = await Product.find({});
     res.json(products);
   } catch (err) {
@@ -37,20 +79,49 @@ router.get("/products/:login", async (req, res) => {
   }
 });
 
-// Mahsulotlarni sinxronlash
+// ====================================================================
+// POST /sync-products/:login
+// ====================================================================
 router.post("/sync-products/:login", async (req, res) => {
+  let safeLogin;
   try {
-    const { login } = req.params;
-    const Product = getProductModel(login);
-    const { products } = req.body;
-    if (!Array.isArray(products)) return res.status(400).json({ message: "Noto'g'ri format" });
+    safeLogin = sanitizeLogin(req.params.login);
+  } catch (e) {
+    return res.status(400).json({ message: e.message });
+  }
+
+  const { products } = req.body;
+  if (!Array.isArray(products)) {
+    return res.status(400).json({ message: "Noto'g'ri format" });
+  }
+
+  try {
+    const Product = getProductModel(safeLogin);
 
     for (const p of products) {
+      let safeBarcode, safeName, safePrice, safeBasePrice, safeQty, safeCategory;
+      try {
+        safeBarcode  = sanitizeBarcode(p.barcode);
+        safeName     = sanitizeName(p.name);
+        safePrice    = sanitizeNumber(p.price, 'price');
+        safeBasePrice= sanitizeNumber(p.basePrice, 'basePrice');
+        safeQty      = sanitizeNumber(p.quantity, 'quantity');
+        safeCategory = sanitizeCategory(p.category);
+      } catch (e) {
+        return res.status(400).json({ message: e.message });
+      }
+
       await Product.updateOne(
-        { barcode: p.barcode },
-        { 
-          $set: { name: p.name, price: p.price, basePrice: p.basePrice, quantity: p.quantity, category: p.category },
-          $setOnInsert: { sold: p.sold || 0 }
+        { barcode: { $eq: safeBarcode } },
+        {
+          $set: {
+            name:      safeName,
+            price:     safePrice,
+            basePrice: safeBasePrice,
+            quantity:  safeQty,
+            category:  safeCategory
+          },
+          $setOnInsert: { sold: sanitizeNumber(p.sold || 0, 'sold') }
         },
         { upsert: true }
       );
@@ -63,14 +134,25 @@ router.post("/sync-products/:login", async (req, res) => {
   }
 });
 
-// Narxni yangilash
+// ====================================================================
+// POST /update-price/:login
+// ====================================================================
 router.post("/update-price/:login", async (req, res) => {
+  let safeLogin, safeBarcode, safePrice;
   try {
-    const { login } = req.params;
-    const { barcode, newPrice } = req.body;
-    const Product = getProductModel(login);
+    safeLogin   = sanitizeLogin(req.params.login);
+    safeBarcode = sanitizeBarcode(req.body.barcode);
+    safePrice   = sanitizeNumber(req.body.newPrice, 'newPrice');
+  } catch (e) {
+    return res.status(400).json({ message: e.message });
+  }
 
-    await Product.updateOne({ barcode }, { $set: { price: newPrice } });
+  try {
+    const Product = getProductModel(safeLogin);
+    await Product.updateOne(
+      { barcode: { $eq: safeBarcode } },
+      { $set: { price: safePrice } }
+    );
     res.json({ message: "✅ Narx yangilandi" });
   } catch (err) {
     console.error(err);
@@ -78,28 +160,32 @@ router.post("/update-price/:login", async (req, res) => {
   }
 });
 
-// Ulgurji narxni yangilash (basePrice)
+// ====================================================================
+// POST /update-base-price/:login
+// ====================================================================
 router.post("/update-base-price/:login", async (req, res) => {
+  let safeLogin, safeBarcode, safeBasePrice;
   try {
-    const { login } = req.params;
-    const { barcode, newBasePrice } = req.body;
+    safeLogin     = sanitizeLogin(req.params.login);
+    safeBarcode   = sanitizeBarcode(req.body.barcode);
+    safeBasePrice = sanitizeNumber(req.body.newBasePrice, 'newBasePrice');
+  } catch (e) {
+    return res.status(400).json({ message: e.message });
+  }
 
-    if (!barcode || newBasePrice == null) {
-      return res.status(400).json({ message: "Barcode va yangi narx kerak" });
-    }
-
-    const Product = getProductModel(login);
+  try {
+    const Product = getProductModel(safeLogin);
 
     const updated = await Product.updateOne(
-      { barcode: barcode },
-      { $set: { basePrice: Number(newBasePrice) } }
+      { barcode: { $eq: safeBarcode } },
+      { $set: { basePrice: safeBasePrice } }
     );
 
     if (updated.matchedCount === 0) {
       return res.status(404).json({ message: "Mahsulot topilmadi" });
     }
-    const updatedProduct = await Product.findOne({ barcode });
-    
+
+    const updatedProduct = await Product.findOne({ barcode: { $eq: safeBarcode } });
     res.json({ message: "✅ Ulgurji narx yangilandi", product: updatedProduct });
   } catch (err) {
     console.error("❌ Base price update xatosi:", err);
@@ -107,16 +193,25 @@ router.post("/update-base-price/:login", async (req, res) => {
   }
 });
 
-// Mahsulotni o'chirish
+// ====================================================================
+// POST /delete-product/:login
+// ====================================================================
 router.post("/delete-product/:login", async (req, res) => {
+  let safeLogin, safeBarcode;
   try {
-    const { login } = req.params;
-    const { barcode } = req.body;
-    const Product = getProductModel(login);
+    safeLogin   = sanitizeLogin(req.params.login);
+    safeBarcode = sanitizeBarcode(req.body.barcode);
+  } catch (e) {
+    return res.status(400).json({ message: e.message });
+  }
 
-    const deleted = await Product.deleteOne({ barcode });
-    if (deleted.deletedCount === 0) return res.status(404).json({ message: "Mahsulot topilmadi" });
+  try {
+    const Product = getProductModel(safeLogin);
+    const deleted = await Product.deleteOne({ barcode: { $eq: safeBarcode } });
 
+    if (deleted.deletedCount === 0) {
+      return res.status(404).json({ message: "Mahsulot topilmadi" });
+    }
     res.json({ message: "✅ Mahsulot o'chirildi" });
   } catch (err) {
     console.error(err);
@@ -124,26 +219,35 @@ router.post("/delete-product/:login", async (req, res) => {
   }
 });
 
-// Yangi mahsulot qo'shish yoki mavjudini yangilash (upsert)
+// ====================================================================
+// POST /update-or-add-user-product
+// ====================================================================
 router.post("/update-or-add-user-product", async (req, res) => {
+  let safeLogin, safeBarcode, safeName, safePrice, safeBasePrice, safeQty, safeCategory;
   try {
-    const { login, barcode, name, price = 0, basePrice = 0, quantity = 0, category = "" } = req.body;
+    safeLogin     = sanitizeLogin(req.body.login);
+    safeBarcode   = sanitizeBarcode(req.body.barcode);
+    safeName      = sanitizeName(req.body.name);
+    safePrice     = sanitizeNumber(req.body.price     ?? 0, 'price');
+    safeBasePrice = sanitizeNumber(req.body.basePrice ?? 0, 'basePrice');
+    safeQty       = sanitizeNumber(req.body.quantity  ?? 0, 'quantity');
+    safeCategory  = sanitizeCategory(req.body.category ?? '');
+  } catch (e) {
+    return res.status(400).json({ message: e.message });
+  }
 
-    if (!login || !barcode) {
-      return res.status(400).json({ message: "Login va barcode majburiy!" });
-    }
-
-    const Product = getProductModel(login);
+  try {
+    const Product = getProductModel(safeLogin);
 
     const updated = await Product.findOneAndUpdate(
-      { barcode },
+      { barcode: { $eq: safeBarcode } },
       {
         $set: {
-          name: name || "Nomsiz mahsulot",
-          price: Number(price),
-          basePrice: Number(basePrice),
-          category: category.trim(),
-          quantity: Number(quantity)
+          name:      safeName,
+          price:     safePrice,
+          basePrice: safeBasePrice,
+          category:  safeCategory,
+          quantity:  safeQty
         }
       },
       { upsert: true, new: true }
@@ -151,7 +255,7 @@ router.post("/update-or-add-user-product", async (req, res) => {
 
     res.json({
       success: true,
-      message: updated.isNew ? "Yangi mahsulot qo'shildi" : "Mahsulot yangilandi",
+      message: "Mahsulot saqlandi",
       product: updated
     });
   } catch (err) {
@@ -160,27 +264,39 @@ router.post("/update-or-add-user-product", async (req, res) => {
   }
 });
 
-// ================== AI ==================
-// AI so'rovlariga javob berish
+// ====================================================================
+// POST /ai-query/:login
+// ====================================================================
 router.post("/ai-query/:login", async (req, res) => {
+  let safeLogin;
   try {
-    const { login } = req.params;
-    const { query } = req.body;
+    safeLogin = sanitizeLogin(req.params.login);
+  } catch (e) {
+    return res.status(400).json({ message: e.message });
+  }
 
-    const Product = getProductModel(login);
+  const query = req.body.query;
+  if (!query || typeof query !== 'string') {
+    return res.status(400).json({ message: "query majburiy" });
+  }
 
-    if (query.toLowerCase().includes("mahsulotlar")) {
+  // ✅ query faqat o'qiladi, DB'ga tushmaydi
+  const safeQuery = query.toLowerCase().trim();
+
+  try {
+    const Product = getProductModel(safeLogin);
+
+    if (safeQuery.includes("mahsulotlar")) {
       const products = await Product.find({}).lean();
       return res.json({ type: 'products', data: products });
     }
 
-    if (query.toLowerCase().includes("sotilgan")) {
+    if (safeQuery.includes("sotilgan")) {
       const products = await Product.find({ sold: { $gt: 0 } }).lean();
       return res.json({ type: 'sold', data: products });
     }
 
     return res.json({ type: 'text', data: "Savolingizga mos ma'lumot topilmadi." });
-
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Server xatosi" });
