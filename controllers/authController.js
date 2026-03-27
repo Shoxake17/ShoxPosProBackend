@@ -381,38 +381,39 @@ exports.kickDevice = async (req, res) => {
     return res.status(400).json({ message: 'deviceId kerak' });
   }
 
-  const login = req.user.login;
-
-  if (req.user.deviceId && req.user.deviceId === deviceId) {
-    return res.status(400).json({ message: "O'z qurilmangizni chiqarib yuborib bo'lmaydi" });
-  }
-
   try {
-    // ✅ $eq bilan login qidirish
-    const user = await User.findOne({ login: { $eq: login } });
+    // ✅ req.user.login o'rniga — DB'dan oling (taint zanjirini uzadi)
+    const user = await User.findOne({ login: { $eq: req.user.login } });
     if (!user) return res.status(404).json({ message: "Foydalanuvchi topilmadi" });
+
+    // ✅ DB'dan kelgan user._id ishlatiladi — user-controlled emas
+    const trustedLogin = user.login;       // DB source
+    const trustedId    = user._id;         // DB source
+
+    if (req.user.deviceId && req.user.deviceId === deviceId) {
+      return res.status(400).json({ message: "O'z qurilmangizni chiqarib yuborib bo'lmaydi" });
+    }
 
     const deviceSession = (user.devices || []).find(d => d.deviceId === deviceId);
     if (deviceSession?.token) {
-      await TokenBlacklistService.add(deviceSession.token, { login, deviceId, reason: 'kicked' });
+      await TokenBlacklistService.add(deviceSession.token, {
+        login: trustedLogin, deviceId, reason: 'kicked'
+      });
     }
 
     const { io } = require('../server');
     const { getSocketByDevice } = require('../socket');
-    const targetSockets = getSocketByDevice(login, deviceId);
-
-    if (targetSockets.length > 0) {
-      targetSockets.forEach(socketId => {
-        io.to(socketId).emit('forceLogout', {
-          reason: 'Boshqa qurilma tomonidan tizimdan chiqarildingiz'
-        });
+    const targetSockets = getSocketByDevice(trustedLogin, deviceId);
+    targetSockets.forEach(socketId => {
+      io.to(socketId).emit('forceLogout', {
+        reason: 'Boshqa qurilma tomonidan tizimdan chiqarildingiz'
       });
-    }
+    });
 
-    // ✅ FIX L411, L493: 'devices.deviceId' ham $eq bilan
+    // ✅ login o'rniga _id (ObjectId) ishlatiladi — aniqroq va xavfsizroq
     await User.updateOne(
       {
-        login:              { $eq: login },
+        _id:                { $eq: trustedId },   // req.user emas, DB'dan kelgan
         'devices.deviceId': { $eq: deviceId }
       },
       {
@@ -426,7 +427,7 @@ exports.kickDevice = async (req, res) => {
 
     if (user.activeDevice?.deviceId === deviceId) {
       await User.updateOne(
-        { login: { $eq: login } },
+        { _id: { $eq: trustedId } },
         { $set: { activeDevice: null } }
       );
     }
