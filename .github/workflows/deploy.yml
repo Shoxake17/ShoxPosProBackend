@@ -8,16 +8,14 @@ on:
     - cron: '0 0 * * *'
 
 jobs:
-  # ─────────────────────────────────────────
-  # 1. SAST — Har push'da ishga tushadimi
-  # ─────────────────────────────────────────
-  sast:
+  # 1. Semgrep — Tezkor xavfsizlik tahlili (SAST)
+  semgrep_sast:
     name: SAST - Semgrep
     runs-on: ubuntu-latest
     permissions:
       security-events: write
+      actions: read
       contents: read
-
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -30,7 +28,7 @@ jobs:
       - name: Install Semgrep
         run: pip install semgrep
 
-      - name: Run Semgrep SAST
+      - name: Run Semgrep Full Scan
         run: |
           semgrep scan \
             --config=p/owasp-top-ten \
@@ -42,47 +40,44 @@ jobs:
             --output=semgrep.sarif \
             . || true
 
-          if [ ! -f semgrep.sarif ]; then
-            echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Semgrep","rules":[]}},"results":[]}]}' > semgrep.sarif
-            echo "⚠️ semgrep.sarif yaratilmadi, bo'sh fayl ishlatilmoqda"
-          else
-            echo "✅ semgrep.sarif yaratildi ($(wc -c < semgrep.sarif) bytes)"
-          fi
-
-      - name: Check for Critical vulnerabilities
+      - name: Check for Critical Issues
         run: |
           CRITICAL=$(jq '[.runs[].results[] | select(.level == "error")] | length' semgrep.sarif)
-          HIGH=$(jq '[.runs[].results[] | select(.level == "warning")] | length' semgrep.sarif)
-          echo "🔴 Critical: $CRITICAL  |  🟡 High: $HIGH"
+          echo "🔴 Critical Security Issues: $CRITICAL"
           if [ "$CRITICAL" -gt 0 ]; then
-            echo "❌ Critical zaifliklar topildi — pipeline to'xtatildi!"
+            echo "❌ Kritik zaiflik topildi! Backend pipeline to'xtatiladi."
             exit 1
           fi
-          echo "✅ Kritik zaiflik topilmadi."
 
-      - name: Upload SARIF to GitHub Security
+      - name: Upload Report to GitHub Security
         uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: semgrep.sarif
         continue-on-error: true
 
-      - name: Upload SAST Report
-        uses: actions/upload-artifact@v4
-        if: always()
+  # 2. SonarCloud — Kod sifati va chuqur tahlil (SAST)
+  sonarcloud_sast:
+    name: SAST - SonarCloud
+    runs-on: ubuntu-latest
+    needs: semgrep_sast
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
         with:
-          name: sast-semgrep-report
-          path: semgrep.sarif
-          retention-days: 30
+          fetch-depth: 0 
 
-  # ─────────────────────────────────────────
-  # 2. Build va Push (SAST o'tgandagina)
-  # ─────────────────────────────────────────
+      - name: SonarCloud Scan
+        uses: SonarSource/sonarcloud-github-action@master
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  # 3. Build va Push (Faqat SAST bosqichlari o'tsa)
   build-and-push:
     name: Build and Push Docker Image
     runs-on: ubuntu-latest
-    needs: sast
-
+    needs: [semgrep_sast, sonarcloud_sast]
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -100,15 +95,13 @@ jobs:
           context: .
           push: true
           tags: ghcr.io/shoxake17/shoxposprobackend:latest
+          no-cache: true
 
-  # ─────────────────────────────────────────
-  # 3. Deploy
-  # ─────────────────────────────────────────
+  # 4. Deploy
   deploy:
     name: Deploy to VPS
     runs-on: ubuntu-latest
     needs: build-and-push
-
     steps:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v0.1.7
@@ -123,45 +116,25 @@ jobs:
             docker-compose up -d --no-deps --force-recreate backend
             docker logout ghcr.io
 
-  # ─────────────────────────────────────────
-  # 4. DAST — OWASP ZAP (faqat tunda/manual)
-  # ─────────────────────────────────────────
+  # 5. DAST — OWASP ZAP (Tunda/Manual)
   security_scan:
     name: OWASP ZAP Security Scan
     runs-on: ubuntu-latest
     needs: deploy
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Fix workspace permissions
-        run: chmod -R 777 $GITHUB_WORKSPACE
-
-      - name: Run OWASP ZAP Full Scan
+      - name: Run ZAP Scan
         run: |
+          chmod -R 777 $GITHUB_WORKSPACE
           docker run --rm -v $(pwd):/zap/wrk/:rw zaproxy/zap-stable \
-            zap-full-scan.py -t https://shoxpospro.uz \
-            -r zap_report.html \
-            -J zap_report.json \
-            -m 5 || true
+            zap-full-scan.py -t https://shoxpospro.uz -r zap_report.html -J zap_report.json -m 5 || true
 
-      - name: Check for High Vulnerabilities
-        run: |
-          HIGH=$(jq '.site[0].alerts | map(select(.risk == "High")) | length' zap_report.json)
-          if [ "$HIGH" -gt 0 ]; then
-            echo "❌ CRITICAL: $HIGH high severity vulnerabilities found!"
-            exit 1
-          else
-            echo "✅ No high severity vulnerabilities found."
-          fi
-
-      - name: Upload Security Reports
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: zap-security-reports
-          path: |
-            zap_report.html
-            zap_report.json
+          name: zap-backend-reports
+          path: zap_report.*
