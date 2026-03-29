@@ -34,7 +34,6 @@ function sanitizeDeviceId(value) {
   return value;
 }
 
-// ✅ YANGI: ObjectId sanitizer (userId uchun)
 function sanitizeObjectId(value) {
   if (!value || typeof value !== 'string') return null;
   if (!/^[a-fA-F0-9]{24}$/.test(value)) {
@@ -132,7 +131,6 @@ exports.login = async (req, res) => {
   try {
     const normalizedLogin = login.toLowerCase();
 
-    // ✅ $eq bilan login qidirish
     const user = await User.findOne({ login: { $eq: normalizedLogin } }).select('+password');
 
     if (!user) return res.status(404).json({ message: "Foydalanuvchi topilmadi" });
@@ -204,7 +202,15 @@ exports.login = async (req, res) => {
     user.loginAttempts = 0;
     const { accessToken, refreshToken, refreshTokenId } = createTokens(user, deviceId);
 
-    const deviceExists = user.devices?.some(d => d.deviceId === deviceId);
+    // ✅ Login paytida ham eski qurilmalarni tozalash
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    user.devices = (user.devices || []).filter(d =>
+      d.isActive === true ||
+      d.deviceId === deviceId ||
+      new Date(d.lastLogin) > thirtyDaysAgo
+    );
+
+    const deviceExists = user.devices.some(d => d.deviceId === deviceId);
     if (deviceExists) {
       user.devices = user.devices.map(d =>
         d.deviceId === deviceId
@@ -212,7 +218,6 @@ exports.login = async (req, res) => {
           : { ...d.toObject(), isActive: false }
       );
     } else {
-      user.devices = user.devices || [];
       user.devices.push({
         deviceId,
         deviceType: deviceType || "unknown",
@@ -283,7 +288,6 @@ exports.refresh = async (req, res) => {
       return res.status(403).json({ message: "Token ma'lumotlari noto'g'ri" });
     }
 
-    // ✅ $eq bilan login qidirish
     const user = await User.findOne({ login: { $eq: normalizedLogin } });
 
     if (!user || user.blocked) {
@@ -308,7 +312,6 @@ exports.refresh = async (req, res) => {
 
     const { accessToken, refreshToken: newRefreshToken, refreshTokenId } = createTokens(user, safeDeviceId);
 
-    // ✅ FIX L383: 'devices.deviceId' ham $eq bilan
     await User.updateOne(
       {
         login:              { $eq: user.login },
@@ -344,21 +347,42 @@ exports.refresh = async (req, res) => {
 // ====================================================================
 exports.getUserDevices = async (req, res) => {
   try {
-    // ✅ $eq bilan login qidirish
     const user = await User.findOne({ login: { $eq: req.user.login } }).select('devices');
     if (!user) return res.status(404).json({ message: "Foydalanuvchi topilmadi" });
 
-    const devices = (user.devices || []).map(d => ({
+    // ✅ 30 kundan eski INACTIVE qurilmalarni bazadan o'chirish
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const beforeCount = (user.devices || []).length;
+
+    const cleanedDevices = (user.devices || []).filter(d =>
+      d.isActive === true || new Date(d.lastLogin) > thirtyDaysAgo
+    );
+
+    // ✅ Faqat o'zgarish bo'lsa save qilish (keraksiz DB yozuvdan qochish)
+    if (cleanedDevices.length !== beforeCount) {
+      await User.updateOne(
+        { login: { $eq: req.user.login } },
+        { $set: { devices: cleanedDevices } }
+      );
+      if (isDev) {
+        console.log(`🧹 ${req.user.login}: ${beforeCount - cleanedDevices.length} ta eski qurilma o'chirildi`);
+      }
+    }
+
+    // ✅ Cache-Control: no-store — 304 loop ni oldini olish
+    res.setHeader('Cache-Control', 'no-store');
+
+    const devices = cleanedDevices.map(d => ({
       deviceId:     d.deviceId,
       deviceType:   d.deviceType,
       deviceOS:     d.deviceOS,
       deviceModel:  d.deviceModel  || null,
       location:     d.location     || null,
       ip:           d.ip           || null,
-      isActive:     d.isActive,
+      isActive:     d.isActive     || false,
       lastLogin:    d.lastLogin,
-      isTrusted:    d.isTrusted,
-      isSuspicious: d.isSuspicious
+      isTrusted:    d.isTrusted    || false,
+      isSuspicious: d.isSuspicious || false,
     }));
 
     res.json({ success: true, devices });
@@ -382,13 +406,11 @@ exports.kickDevice = async (req, res) => {
   }
 
   try {
-    // ✅ req.user.login o'rniga — DB'dan oling (taint zanjirini uzadi)
     const user = await User.findOne({ login: { $eq: req.user.login } });
     if (!user) return res.status(404).json({ message: "Foydalanuvchi topilmadi" });
 
-    // ✅ DB'dan kelgan user._id ishlatiladi — user-controlled emas
-    const trustedLogin = user.login;       // DB source
-    const trustedId    = user._id;         // DB source
+    const trustedLogin = user.login;
+    const trustedId    = user._id;
 
     if (req.user.deviceId && req.user.deviceId === deviceId) {
       return res.status(400).json({ message: "O'z qurilmangizni chiqarib yuborib bo'lmaydi" });
@@ -410,10 +432,9 @@ exports.kickDevice = async (req, res) => {
       });
     });
 
-    // ✅ login o'rniga _id (ObjectId) ishlatiladi — aniqroq va xavfsizroq
     await User.updateOne(
       {
-        _id:                { $eq: trustedId },   // req.user emas, DB'dan kelgan
+        _id:                { $eq: trustedId },
         'devices.deviceId': { $eq: deviceId }
       },
       {
@@ -458,7 +479,6 @@ exports.changePassword = async (req, res) => {
   }
 
   try {
-    // ✅ $eq bilan login qidirish
     const user = await User.findOne({ login: { $eq: req.user.login } }).select('+password');
     if (!user) return res.status(404).json({ message: 'Foydalanuvchi topilmadi' });
     if (!user.password) return res.status(500).json({ message: 'Server xatosi' });
@@ -495,7 +515,6 @@ exports.register = async (req, res) => {
   try {
     const normalizedLogin = login.toLowerCase();
 
-    // ✅ $eq bilan qidirish
     const existingUser = await User.findOne({ login: { $eq: normalizedLogin } });
     if (existingUser) return res.status(409).json({ message: 'Bu login allaqachon mavjud' });
 
@@ -532,13 +551,11 @@ exports.confirmLogin = async (req, res) => {
       return res.status(403).json({ message: "Ruxsat yo'q" });
     }
 
-    // ✅ $eq bilan qidirish
     const user = await User.findOne({ login: { $eq: normalizedLogin } });
     if (!user) return res.status(404).json({ message: 'Foydalanuvchi topilmadi' });
 
     if (confirm) {
       if (user.activeDevice?.deviceId) {
-        // ✅ FIX L527: deviceId ham $eq bilan
         await UserSession.updateOne(
           {
             userId:   user._id,
@@ -571,7 +588,7 @@ exports.logout = async (req, res) => {
 
   try {
     deviceId   = sanitizeDeviceId(req.body.deviceId);
-    safeUserId = sanitizeObjectId(req.body.userId); // ✅ FIX: ObjectId format tekshiruvi
+    safeUserId = sanitizeObjectId(req.body.userId);
   } catch (validationErr) {
     return res.status(400).json({ message: validationErr.message });
   }
@@ -581,7 +598,6 @@ exports.logout = async (req, res) => {
   }
 
   try {
-    // ✅ FIX L544: userId va deviceId ham $eq bilan
     const session = await UserSession.findOne({
       userId:   { $eq: safeUserId },
       deviceId: { $eq: deviceId },
@@ -603,7 +619,6 @@ exports.logout = async (req, res) => {
         });
       }
 
-      // ✅ FIX: 'devices.deviceId' ham $eq bilan
       await User.updateOne(
         {
           _id:                { $eq: safeUserId },
@@ -658,7 +673,6 @@ exports.createAdmin = async (req, res) => {
   try {
     const normalizedLogin = login.toLowerCase();
 
-    // ✅ $eq bilan qidirish
     const existingUser = await User.findOne({ login: { $eq: normalizedLogin } });
     if (existingUser) return res.status(409).json({ message: 'Bu login allaqachon mavjud' });
 

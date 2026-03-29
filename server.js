@@ -1,27 +1,29 @@
 // server.js
 require('dotenv').config();
 
-const express = require('express');
-const http = require('http');
-const socketIo = require('socket.io');
-const { initIO, getUserSockets, getSocketByDevice } = require('./socket');
-const path = require('path');
-const config = require('./config');
-const fs = require('fs');
-const cors = require('cors');
-const helmet = require('helmet');
+const express    = require('express');
+const http       = require('http');
+const socketIo   = require('socket.io');
+const { initIO, getUserSockets } = require('./socket');
+const path       = require('path');
+const config     = require('./config');
+const fs         = require('fs');
+const cors       = require('cors');
+const helmet     = require('helmet');
 const cookieParser = require('cookie-parser');
-const csrf = require('csurf');
-const connectDB = require('./config/db');
-const User = require('./models/User');
-const verifyToken = require('./middleware/verifyToken');
-const TokenBlacklistService = require('./services/tokenBlacklistService');
-const authController = require('./controllers/authController');
-const cashbackProxy = require('./routes/cashbackProxy');
+const csrf       = require('csurf');
+const rateLimit  = require('express-rate-limit');
+
+const connectDB              = require('./config/db');
+const User                   = require('./models/User');
+const verifyToken            = require('./middleware/verifyToken');
+const TokenBlacklistService  = require('./services/tokenBlacklistService');
+const authController         = require('./controllers/authController');
+const cashbackProxy          = require('./routes/cashbackProxy');
 
 connectDB();
 
-const app = express();
+const app    = express();
 const server = http.createServer(app);
 
 // ====================================
@@ -41,64 +43,62 @@ const allowedOrigins = [
 ];
 
 app.use(cors({
-  origin: function (origin, callback) {
+  origin: (origin, callback) => {
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
-      // ✅ FIX: Origin logga chiqarilmaydi (log injection oldini olish)
+      // ✅ Origin logga chiqarilmaydi — log injection oldini olish
       callback(new Error('CORS policy violation'));
     }
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'CSRF-Token', 'X-CSRF-Token', 'X-Requested-With'],
-  exposedHeaders: ['CSRF-Token']
+  // ✅ Faqat 'CSRF-Token' — 'X-CSRF-Token' o'chirildi (server bilan bir xil)
+  allowedHeaders: ['Content-Type', 'Authorization', 'CSRF-Token', 'X-Requested-With'],
+  exposedHeaders: ['CSRF-Token'],
 }));
 
 // ====================================
-// 🛡️ HELMET — ✅ FIX: CSP to'liq yoqilgan
+// 🛡️ HELMET
 // ====================================
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc: ["'self'"],
-      styleSrc: ["'self'", "'unsafe-inline'"],
-      imgSrc: ["'self'", "data:", "https:"],
+      scriptSrc:  ["'self'"],
+      styleSrc:   ["'self'", "'unsafe-inline'"],
+      imgSrc:     ["'self'", "data:", "https:"],
       connectSrc: ["'self'"],
-      fontSrc: ["'self'"],
-      objectSrc: ["'none'"],
-      mediaSrc: ["'self'"],
-      frameSrc: ["'none'"],
+      fontSrc:    ["'self'"],
+      objectSrc:  ["'none'"],
+      mediaSrc:   ["'self'"],
+      frameSrc:   ["'none'"],
     },
   },
   crossOriginEmbedderPolicy: true,
-  crossOriginOpenerPolicy: { policy: "same-origin" },    // ✅ FIX: qo'shildi
-  crossOriginResourcePolicy: { policy: "same-origin" },  // ✅ FIX: qo'shildi
-  referrerPolicy: { policy: "strict-origin-when-cross-origin" }, // ✅ FIX: qo'shildi
-  hsts: {                                                // ✅ FIX: HTTPS majburiy
-    maxAge: 31536000,
-    includeSubDomains: true,
-    preload: true
-  },
-  noSniff: true,       // ✅ FIX: MIME sniffing oldini olish
-  frameguard: { action: 'deny' }, // ✅ FIX: Clickjacking oldini olish
+  crossOriginOpenerPolicy:   { policy: 'same-origin' },
+  crossOriginResourcePolicy: { policy: 'same-origin' },
+  referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+  hsts: { maxAge: 31536000, includeSubDomains: true, preload: true },
+  noSniff:    true,
+  frameguard: { action: 'deny' },
 }));
 
 // ====================================
 // 🔌 SOCKET.IO
+// ✅ allowEIO3: false — eski EIO3 protokoli o'chirildi (xavfsizlik)
 // ====================================
 const io = socketIo(server, {
   path: '/socket.io/',
   cors: {
-    origin: allowedOrigins,
-    methods: ["GET", "POST"],
-    credentials: true
+    origin:      allowedOrigins,
+    methods:     ['GET', 'POST'],
+    credentials: true,
   },
-  transports: ['websocket', 'polling'],
-  allowEIO3: true,
-  pingTimeout: 60000,
-  pingInterval: 25000
+  transports:   ['websocket', 'polling'],
+  allowEIO3:    false,   // ✅ false — EIO3 o'chirildi
+  pingTimeout:  60000,
+  pingInterval: 25000,
 });
 
 // ====================================
@@ -108,36 +108,54 @@ app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 app.use(express.static('public'));
 app.use(express.static(path.join(__dirname, 'public', 'dist')));
-app.use("/temp", express.static(path.join(__dirname, "temp")));
+app.use('/temp', express.static(path.join(__dirname, 'temp')));
 app.use(cookieParser());
 
+// ====================================
+// 🔒 CSRF HIMOYA
+// ====================================
 const csrfProtection = csrf({
   cookie: {
-    key: '_csrf',
+    key:      '_csrf',
     httpOnly: true,
-    secure: config.NODE_ENV === 'production',
-    sameSite: config.NODE_ENV === 'production' ? 'strict' : 'lax'
-  }
+    secure:   config.NODE_ENV === 'production',
+    sameSite: config.NODE_ENV === 'production' ? 'strict' : 'lax',
+  },
 });
 
 // ====================================
-// 🔑 CSRF TOKEN
+// 🛡️ RATE LIMITLAR
 // ====================================
-app.get('/api/csrf-token', csrfProtection, (req, res) => {
+const apiLimiter = require('./middleware/apiRateLimit');
+
+// ✅ CSRF token uchun alohida rate limit — brute-force oldini olish
+const csrfLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 daqiqa
+  max: 30,                   // 15 daqiqada 30 ta so'rov
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: 'Juda ko\'p so\'rov. Keyinroq urinib ko\'ring.' },
+  // ✅ stack trace chiqarilmaydi
+  handler: (req, res) => {
+    res.status(429).json({ message: 'Juda ko\'p so\'rov. Keyinroq urinib ko\'ring.' });
+  },
+});
+
+// ✅ Global API rate limit
+app.use('/api', apiLimiter);
+// ✅ /metrics ham himoyalangan
+app.use('/metrics', apiLimiter);
+
+// ====================================
+// 🔑 CSRF TOKEN ENDPOINT
+// ✅ csrfLimiter qo'shildi
+// ====================================
+app.get('/api/csrf-token', csrfLimiter, csrfProtection, (req, res) => {
   res.json({ csrfToken: req.csrfToken() });
 });
 
 // ====================================
-// 🛡️ GLOBAL API RATE LIMIT (DoS/DDoS)
-// ====================================
-const apiLimiter = require('./middleware/apiRateLimit');
-app.use('/api', apiLimiter);
-
-// ✅ FIX: /metrics ham rate limit bilan himoyalandi
-app.use('/metrics', apiLimiter);
-
-// ====================================
-// 📝 LOGGING — ✅ FIX: production'da kam log
+// 📝 LOGGING — production'da minimal
 // ====================================
 app.use((req, res, next) => {
   if (config.NODE_ENV === 'development') {
@@ -149,103 +167,115 @@ app.use((req, res, next) => {
 // ====================================
 // 🛣️ ROUTERLAR
 // ====================================
-const loginLimiter = require('./middleware/rateLimit');
-const productRoutes = require("./routes/productRoutes");
-const loginProductRoutes = require("./routes/loginProducts");
-const scanProductsRouter = require("./routes/scanProducts");
-const aiRoutes = require('./routes/aiRoutes');
-const authRouter = require('./routes/auth')(csrfProtection);
-const debtsRoutes = require('./routes/debts');
-const salesRoutes = require('./routes/salesRoutes');
-const biometricRouter = require('./routes/biometricRoutes');
-const printerRoutes = require('./routes/printerRoutes')(io);
+const productRoutes       = require('./routes/productRoutes');
+const loginProductRoutes  = require('./routes/loginProducts');
+const scanProductsRouter  = require('./routes/scanProducts');
+const aiRoutes            = require('./routes/aiRoutes');
+const authRouter          = require('./routes/auth')(csrfProtection);
+const debtsRoutes         = require('./routes/debts');
+const salesRoutes         = require('./routes/salesRoutes');
+const biometricRouter     = require('./routes/biometricRoutes');
+const printerRoutes       = require('./routes/printerRoutes')(io);
 const authenticatorRouter = require('./routes/authenticatorRoutes');
-const adminRoutes = require('./routes/adminRoutes');
+const adminRoutes         = require('./routes/adminRoutes');
 const { router: metricsRouter } = require('./routes/metrics');
 
-app.use('/metrics', metricsRouter);
-app.use('/api', authRouter);
-app.use('/api', biometricRouter);
-app.use('/api/google-auth', authenticatorRouter);
-app.use('/api', aiRoutes);
-app.use('/api/printer', printerRoutes);
-app.use("/api/products", loginProductRoutes);
-app.use("/api/products", productRoutes);
-app.use("/api", scanProductsRouter);
-app.use('/api', debtsRoutes);
-app.use('/api', salesRoutes);
-app.use('/api/admin', adminRoutes);
-app.use('/api/cashback', cashbackProxy);
+app.use('/metrics',          metricsRouter);
+app.use('/api',              authRouter);
+app.use('/api',              biometricRouter);
+app.use('/api/google-auth',  authenticatorRouter);
+app.use('/api',              aiRoutes);
+app.use('/api/printer',      printerRoutes);
+app.use('/api/products',     loginProductRoutes);
+app.use('/api/products',     productRoutes);
+app.use('/api',              scanProductsRouter);
+app.use('/api',              debtsRoutes);
+app.use('/api',              salesRoutes);
+app.use('/api/admin',        adminRoutes);
+app.use('/api/cashback',     cashbackProxy);
 
 initIO(io);
-console.log("✅ Barcha routerlar ulandi");
+if (config.NODE_ENV === 'development') {
+  console.log('✅ Barcha routerlar ulandi');
+}
 
 // ====================================
 // 📦 API ENDPOINTLAR
 // ====================================
 
-// Foydalanuvchi holati (faqat kirigan user o'zini yoki admin boshqasini ko'radi)
-app.get("/api/user-status", verifyToken, async (req, res) => {
+// ─── Foydalanuvchi holati ──────────────────────────────────────────────────
+app.get('/api/user-status', verifyToken, async (req, res) => {
   const login = req.query.login;
-  if (!login) return res.status(400).json({ error: "Login kerak" });
-  if (req.user.login !== login.toLowerCase().trim() && req.user.role !== 'admin') {
+  if (!login) return res.status(400).json({ error: 'Login kerak' });
+
+  const safeLogin = String(login).trim().toLowerCase();
+
+  if (req.user.login !== safeLogin && req.user.role !== 'admin') {
     return res.status(403).json({ error: "Ruxsat yo'q" });
   }
   try {
-    const user = await User.findOne({ login: login.toLowerCase().trim() }).select('-password');
-    if (!user) return res.status(404).json({ error: "Foydalanuvchi topilmadi" });
+    const user = await User.findOne({ login: safeLogin }).select('-password');
+    if (!user) return res.status(404).json({ error: 'Foydalanuvchi topilmadi' });
     res.json(user);
   } catch (err) {
-    // ✅ FIX: stack trace logga chiqarilmaydi production'da
-    if (config.NODE_ENV === 'development') console.error("❌ user-status xatosi:", err);
-    res.status(500).json({ error: "Server xatosi" });
+    if (config.NODE_ENV === 'development') console.error('❌ user-status:', err);
+    res.status(500).json({ error: 'Server xatosi' });
   }
 });
 
-// Foydalanuvchini aktivlashtirish (faqat admin)
+// ─── Foydalanuvchini aktivlashtirish (faqat admin) ────────────────────────
 app.post('/api/activate-user', verifyToken, authController.isAdmin, csrfProtection, async (req, res) => {
   const { login } = req.body;
-  if (!login) return res.status(400).json({ message: "Login kerak" });
+  if (!login) return res.status(400).json({ message: 'Login kerak' });
+
+  const safeLogin = String(login).trim().toLowerCase();
+
   try {
     const user = await User.findOneAndUpdate(
-      { login: login.toLowerCase().trim() }, // ✅ FIX: toLowerCase qo'shildi
+      { login: safeLogin },
       { blocked: false, active: true },
       { new: true }
     );
-    if (!user) return res.status(404).json({ message: "Foydalanuvchi topilmadi!" });
+    if (!user) return res.status(404).json({ message: 'Foydalanuvchi topilmadi!' });
 
-    const socketIds = getUserSockets()[login];
-    if (socketIds && socketIds.length > 0) {
+    const socketIds = getUserSockets()[safeLogin];
+    if (socketIds?.length > 0) {
       socketIds.forEach(id => io.to(id).emit('userActivated'));
     }
 
-    res.json({ message: "Foydalanuvchi blokdan chiqarildi va aktiv qilindi." }); // ✅ FIX: login response'da qaytarilmaydi
+    // ✅ login response'da qaytarilmaydi
+    res.json({ message: "Foydalanuvchi blokdan chiqarildi va aktiv qilindi." });
   } catch (err) {
-    if (config.NODE_ENV === 'development') console.error("❌ Activate xatosi:", err);
-    res.status(500).json({ message: "Server xatosi" });
+    if (config.NODE_ENV === 'development') console.error('❌ activate-user:', err);
+    res.status(500).json({ message: 'Server xatosi' });
   }
 });
 
-// ✅ FIX: csrfProtection qo'shildi
+// ─── Logout ───────────────────────────────────────────────────────────────
 app.post('/api/logout', verifyToken, csrfProtection, async (req, res) => {
   try {
     const { login, deviceId } = req.body;
-    if (!login || !deviceId) return res.status(400).json({ message: 'Login va deviceId kerak' });
-    if (req.user.login !== login.toLowerCase().trim() && req.user.role !== 'admin') {
+    if (!login || !deviceId) {
+      return res.status(400).json({ message: 'Login va deviceId kerak' });
+    }
+
+    const safeLogin = String(login).trim().toLowerCase();
+
+    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
       return res.status(403).json({ message: "Ruxsat yo'q" });
     }
 
-    const user = await User.findOne({ login: login.toLowerCase().trim() });
+    const user = await User.findOne({ login: safeLogin });
     if (!user) return res.status(404).json({ message: 'Foydalanuvchi topilmadi.' });
 
     if (user.desktopDeviceId === deviceId) user.desktopDeviceId = null;
-    if (user.mobileDeviceId === deviceId) user.mobileDeviceId = null;
+    if (user.mobileDeviceId  === deviceId) user.mobileDeviceId  = null;
     user.active = false;
 
     if (user.devices) {
       const device = user.devices.find(d => d.deviceId === deviceId);
       if (device?.token) {
-        await TokenBlacklistService.add(device.token, { login, deviceId, reason: 'logout' });
+        await TokenBlacklistService.add(device.token, { login: safeLogin, deviceId, reason: 'logout' });
       }
       user.devices = user.devices.map(d =>
         d.deviceId === deviceId ? { ...d, isActive: false, token: null } : d
@@ -255,97 +285,108 @@ app.post('/api/logout', verifyToken, csrfProtection, async (req, res) => {
     await user.save();
     return res.status(200).json({ success: true, message: 'Logout muvaffaqiyatli!' });
   } catch (err) {
-    if (config.NODE_ENV === 'development') console.error('❌ Logout xatosi:', err);
+    if (config.NODE_ENV === 'development') console.error('❌ logout:', err);
     return res.status(500).json({ success: false, message: 'Server xatosi' });
   }
 });
 
-// Foydalanuvchini bloklash (faqat admin)
+// ─── Foydalanuvchini bloklash (faqat admin) ───────────────────────────────
 app.post('/api/block-user', verifyToken, authController.isAdmin, csrfProtection, async (req, res) => {
   const { login } = req.body;
-  if (!login) return res.status(400).json({ message: "Login kerak" });
+  if (!login) return res.status(400).json({ message: 'Login kerak' });
+
+  const safeLogin = String(login).trim().toLowerCase();
+
   try {
     const user = await User.findOneAndUpdate(
-      { login: login.toLowerCase().trim() }, // ✅ FIX: toLowerCase qo'shildi
+      { login: safeLogin },
       { blocked: true, active: false },
       { new: true }
     );
-    if (!user) return res.status(404).json({ message: "Foydalanuvchi topilmadi!" });
+    if (!user) return res.status(404).json({ message: 'Foydalanuvchi topilmadi!' });
 
-    const socketIds = getUserSockets()[login];
-    if (socketIds && socketIds.length > 0) {
+    const socketIds = getUserSockets()[safeLogin];
+    if (socketIds?.length > 0) {
       socketIds.forEach(id => {
-        io.to(id).emit('forceLogout', { reason: 'Administrator tomonidan bloklandi' }); // ✅ FIX: login yuborilmaydi
+        // ✅ login socket eventda yuborilmaydi
+        io.to(id).emit('forceLogout', { reason: 'Administrator tomonidan bloklandi' });
       });
     }
 
-    res.json({ message: "Foydalanuvchi bloklandi." }); // ✅ FIX: login response'da qaytarilmaydi
+    // ✅ login response'da qaytarilmaydi
+    res.json({ message: 'Foydalanuvchi bloklandi.' });
   } catch (err) {
-    if (config.NODE_ENV === 'development') console.error("❌ Block xatosi:", err);
-    res.status(500).json({ message: "Server xatosi" });
+    if (config.NODE_ENV === 'development') console.error('❌ block-user:', err);
+    res.status(500).json({ message: 'Server xatosi' });
   }
 });
 
-// Faol foydalanuvchilar (faqat admin)
+// ─── Faol foydalanuvchilar (faqat admin) ──────────────────────────────────
 app.get('/api/active-users', verifyToken, authController.isAdmin, async (req, res) => {
   try {
     const users = await User.find({}).select('-password');
     res.json(users);
   } catch (err) {
-    if (config.NODE_ENV === 'development') console.error("❌ Active users xatosi:", err);
-    res.status(500).json({ message: "Server xatosi" });
+    if (config.NODE_ENV === 'development') console.error('❌ active-users:', err);
+    res.status(500).json({ message: 'Server xatosi' });
   }
 });
 
-// ✅ FIX: csrfProtection qo'shildi
+// ─── Sessiya holati tekshiruvi ─────────────────────────────────────────────
 app.post('/api/check-status', verifyToken, csrfProtection, async (req, res) => {
   const { login, deviceId } = req.body;
-  if (!login || !deviceId) return res.status(400).json({ active: false, reason: "Login va deviceId kerak" });
-  if (req.user.login !== login.toLowerCase().trim() && req.user.role !== 'admin') {
+  if (!login || !deviceId) {
+    return res.status(400).json({ active: false, reason: 'Login va deviceId kerak' });
+  }
+
+  const safeLogin = String(login).trim().toLowerCase();
+
+  if (req.user.login !== safeLogin && req.user.role !== 'admin') {
     return res.status(403).json({ active: false, reason: "Ruxsat yo'q" });
   }
   try {
-    const user = await User.findOne({ login: login.toLowerCase().trim() });
-    if (!user) return res.json({ active: false, reason: "Foydalanuvchi topilmadi" });
-    if (user.blocked) return res.json({ active: false, reason: "Siz bloklangansiz!" });
+    const user = await User.findOne({ login: safeLogin });
+    if (!user)        return res.json({ active: false, reason: 'Foydalanuvchi topilmadi' });
+    if (user.blocked) return res.json({ active: false, reason: 'Siz bloklangansiz!' });
     if (user.desktopDeviceId !== deviceId && user.mobileDeviceId !== deviceId) {
       return res.json({ active: false, reason: "Noto'g'ri sessiya!" });
     }
     return res.json({ active: user.active });
   } catch (err) {
-    if (config.NODE_ENV === 'development') console.error("❌ Status tekshirish xatosi:", err);
-    res.status(500).json({ active: false, reason: "Server xatosi" });
+    if (config.NODE_ENV === 'development') console.error('❌ check-status:', err);
+    res.status(500).json({ active: false, reason: 'Server xatosi' });
   }
 });
 
-// ✅ FIX: csrfProtection + deviceId tekshiruvi qo'shildi
-app.post("/api/confirm-login", verifyToken, csrfProtection, async (req, res) => {
+// ─── Qurilmani tasdiqlash ──────────────────────────────────────────────────
+app.post('/api/confirm-login', verifyToken, csrfProtection, async (req, res) => {
   const { login, deviceId, confirm } = req.body;
-  if (!login || !deviceId) return res.status(400).json({ message: "Login va deviceId kerak" });
-  if (req.user.login !== login.toLowerCase().trim() && req.user.role !== 'admin') {
+  if (!login || !deviceId) {
+    return res.status(400).json({ message: 'Login va deviceId kerak' });
+  }
+
+  const safeLogin = String(login).trim().toLowerCase();
+
+  if (req.user.login !== safeLogin && req.user.role !== 'admin') {
     return res.status(403).json({ message: "Ruxsat yo'q" });
   }
   try {
-    const user = await User.findOne({ login: login.toLowerCase().trim() }); // ✅ FIX: toLowerCase qo'shildi
-    if (!user) return res.status(404).json({ message: "Foydalanuvchi topilmadi" });
-    if (!confirm) return res.json({ message: "Qurilma rad etildi, kirish bekor qilindi." });
+    const user = await User.findOne({ login: safeLogin });
+    if (!user)    return res.status(404).json({ message: 'Foydalanuvchi topilmadi' });
+    if (!confirm) return res.json({ message: 'Qurilma rad etildi, kirish bekor qilindi.' });
 
-    // ✅ FIX: deviceId faqat o'z qurilmasi bo'lsa qabul qilinadi (admin bundan mustasno)
     if (req.user.role !== 'admin') {
       const deviceBelongsToUser = user.devices?.some(d => d.deviceId === deviceId);
-      // Yangi qurilma bo'lsa ham qabul qilinadi, lekin log yoziladi
-      if (!deviceBelongsToUser) {
-        if (config.NODE_ENV === 'development') {
-          console.log(`ℹ️ Yangi qurilma tasdiqlanyapti: ${deviceId}`);
-        }
+      if (!deviceBelongsToUser && config.NODE_ENV === 'development') {
+        console.log(`ℹ️ Yangi qurilma tasdiqlanyapti: ${deviceId}`);
       }
     }
 
     const oldDeviceIds = [];
-    if (user.mobileDeviceId && user.mobileDeviceId !== deviceId) oldDeviceIds.push(user.mobileDeviceId);
+    if (user.mobileDeviceId  && user.mobileDeviceId  !== deviceId) oldDeviceIds.push(user.mobileDeviceId);
     if (user.desktopDeviceId && user.desktopDeviceId !== deviceId) oldDeviceIds.push(user.desktopDeviceId);
 
-    const userAgent = req.headers['user-agent'] || "";
+    const userAgent = req.headers['user-agent'] || '';
     if (/mobile/i.test(userAgent)) {
       user.mobileDeviceId = deviceId;
     } else {
@@ -355,16 +396,17 @@ app.post("/api/confirm-login", verifyToken, csrfProtection, async (req, res) => 
     await user.save();
 
     oldDeviceIds.forEach(() => {
-      const socketIds = getUserSockets()[login] || [];
+      const socketIds = getUserSockets()[safeLogin] || [];
       socketIds.forEach(sid => {
-        io.to(sid).emit("requestDeviceConfirm", { newDeviceId: deviceId }); // ✅ FIX: login yuborilmaydi
+        // ✅ login yuborilmaydi
+        io.to(sid).emit('requestDeviceConfirm', { newDeviceId: deviceId });
       });
     });
 
     res.json({ message: "Qurilma tasdiqlandi va sessiya o'tkazildi." });
   } catch (err) {
-    if (config.NODE_ENV === 'development') console.error("❌ confirm-login xatosi:", err);
-    res.status(500).json({ message: "Server xatosi" });
+    if (config.NODE_ENV === 'development') console.error('❌ confirm-login:', err);
+    res.status(500).json({ message: 'Server xatosi' });
   }
 });
 
@@ -384,14 +426,17 @@ app.get('*', (req, res, next) => {
 // ====================================
 // ❌ ERROR HANDLERS
 // ====================================
-app.use((req, res, next) => {
+// 404
+app.use((req, res) => {
   if (!res.headersSent) {
-    res.status(404).json({ message: 'API endpoint topilmadi' }); // ✅ FIX: path qaytarilmaydi
+    // ✅ path qaytarilmaydi — path disclosure oldini olish
+    res.status(404).json({ message: 'API endpoint topilmadi' });
   }
 });
 
+// Global xato handler
 app.use((err, req, res, next) => {
-  // ✅ FIX: production'da stack trace logga chiqarilmaydi
+  // ✅ production'da stack trace logga chiqarilmaydi
   if (config.NODE_ENV === 'development') {
     console.error('❌ Server xatosi:', err.stack);
   } else {
@@ -407,7 +452,8 @@ app.use((err, req, res, next) => {
   if (!res.headersSent) {
     res.status(500).json({
       message: 'Server xatosi',
-      error: config.NODE_ENV === 'development' ? err.message : undefined
+      // ✅ production'da error detail chiqarilmaydi
+      error: config.NODE_ENV === 'development' ? err.message : undefined,
     });
   }
 });
@@ -427,9 +473,9 @@ server.listen(PORT, '0.0.0.0', () => {
 });
 
 process.on('SIGTERM', () => {
-  console.log("👋 SIGTERM signal, server to'xtatilmoqda...");
+  if (config.NODE_ENV === 'development') console.log("👋 SIGTERM — server to'xtatilmoqda...");
   server.close(() => {
-    console.log('✅ Server yopildi');
+    if (config.NODE_ENV === 'development') console.log('✅ Server yopildi');
     process.exit(0);
   });
 });

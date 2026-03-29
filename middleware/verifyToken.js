@@ -1,74 +1,65 @@
 // middleware/verifyToken.js
-
 const jwt = require('jsonwebtoken');
 const config = require('../config');
 const TokenBlacklistService = require('../services/tokenBlacklistService');
 
 module.exports = async function verifyToken(req, res, next) {
   try {
-    // 🍪 Cookie dan token olish (ASOSIY)
-    let token = req.cookies.accessToken;
-
-    // Fallback: Authorization header dan
-    if (!token) {
-      const authHeader = req.headers['authorization'];
-      token = authHeader && authHeader.split(' ')[1];
-    }
+    // Faqat HttpOnly cookie — header fallback yo'q
+    const token = req.cookies.accessToken;
 
     if (!token) {
       return res.status(401).json({
         success: false,
-        message: 'Token topilmadi. Autentifikatsiya talab qilinadi'
+        message: 'Autentifikatsiya talab qilinadi'
       });
     }
 
-    // Blacklist tekshirish
+    // Blacklist tekshirish — 403 qaytaradi (401 emas!)
     const isBlacklisted = await TokenBlacklistService.isBlacklisted(token);
     if (isBlacklisted) {
-      // ✅ 401 qaytaramiz — axiosInstance interceptor refresh qilishga urinadi
-      return res.status(401).json({
+      return res.status(403).json({
         success: false,
-        message: 'Token bloklangan. Qayta kirish talab qilinadi',
-        reason: 'blacklisted'
+        message: 'Kirish taqiqlangan'
       });
     }
 
-    // Token verify
-    const decoded = jwt.verify(token, config.JWT_SECRET || process.env.JWT_SECRET);
+    // Token verify — faqat config dan (|| process.env yo'q)
+    const decoded = jwt.verify(token, config.JWT_SECRET);
 
-    // ✅ FIX: deviceId ni req.user ICHIGA qo'shamiz (req.deviceId emas!)
-    // kickDevice funksiyasi req.user.deviceId ni tekshiradi
     req.user = {
       id:       decoded.id || decoded._id,
       login:    decoded.login,
       role:     decoded.role,
       deviceId: decoded.deviceId || null,
-      iat:      decoded.iat,
-      exp:      decoded.exp,
     };
+    // iat, exp — req.user ga qo'shilmaydi (keraksiz info)
 
     next();
+
   } catch (err) {
-    console.error('❌ Token verify xatosi:', err.message);
+    // console.error ga minimal log — token o'zi chiqmasin
+    console.error('Token verify xatosi:', err.name);
 
     if (err.name === 'TokenExpiredError') {
       return res.status(401).json({
         success: false,
-        message: 'Token muddati tugagan',
-        expiredAt: err.expiredAt
+        message: 'Token muddati tugagan'
+        // expiredAt — o'chirildi
       });
     }
 
     if (err.name === 'JsonWebTokenError') {
-      return res.status(403).json({
+      return res.status(401).json({
+        // 403 emas 401 — invalid token ham auth xatosi
         success: false,
-        message: "Noto'g'ri token formati"
+        message: 'Autentifikatsiya talab qilinadi'
       });
     }
 
     return res.status(500).json({
       success: false,
-      message: 'Token tekshirishda xato'
+      message: 'Ichki server xatosi'
     });
   }
 };
