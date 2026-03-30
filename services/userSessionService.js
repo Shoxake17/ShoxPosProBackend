@@ -35,7 +35,7 @@ exports.createSession = async ({
     await UserSession.findOneAndUpdate(
       { userId, deviceId },
       updateData,
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     );
   } catch (err) {
     console.error('❌ createSession xatosi:', err);

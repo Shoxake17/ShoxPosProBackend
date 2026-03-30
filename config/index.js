@@ -1,4 +1,3 @@
-require('dotenv').config();
 const { cleanEnv, str, num, bool } = require('envalid');
 
 const env = cleanEnv(process.env, {

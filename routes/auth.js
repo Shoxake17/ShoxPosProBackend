@@ -29,7 +29,13 @@ module.exports = (csrfProtection) => {
    * @description Foydalanuvchini tizimga kiritish - BLOKLANGAN USER TEKSHIRUVI BILAN
    * @access Public (rate limited - credential stuffing oldini olish)
    */
-  router.post('/login', loginLimiter, loginValidation, handleValidationErrors, async (req, res) => {
+  router.post('/login', loginLimiter, (req, res, next) => {
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('🔍 [Login Request] Body:', JSON.stringify(req.body, null, 2));
+      console.log('🔍 [Login Request] Headers:', req.headers['content-type']);
+    }
+    next();
+  }, loginValidation, handleValidationErrors, async (req, res) => {
     try {
       const { login, password } = req.body;
 
@@ -74,7 +80,7 @@ module.exports = (csrfProtection) => {
    * @description Yangi foydalanuvchi ro'yxatdan o'tkazish (faqat admin)
    * @access Protected (admin only)
    */
-  router.post('/register', verifyToken, authController.isAdmin, registerValidation, handleValidationErrors, async (req, res) => {
+  router.post('/register', verifyToken, authController.isAdmin, csrfProtection, registerValidation, handleValidationErrors, async (req, res) => {
     try {
       await authController.register(req, res);
     } catch (error) {
@@ -83,6 +89,20 @@ module.exports = (csrfProtection) => {
         success: false,
         message: 'Server xatosi'
       });
+    }
+  });
+
+  /**
+   * @route POST /api/change-password
+   * @description Foydalanuvchi parolini o'zgartirish
+   * @access Protected
+   */
+  router.post('/change-password', verifyToken, csrfProtection, async (req, res) => {
+    try {
+      await authController.changePassword(req, res);
+    } catch (error) {
+      console.error('❌ Change password route error:', error);
+      res.status(500).json({ success: false, message: 'Server xatosi' });
     }
   });
 
@@ -146,17 +166,22 @@ module.exports = (csrfProtection) => {
    * @description Foydalanuvchi parolini o'zgartirish
    * @access Protected
    */
-  router.post('/change-password', verifyToken, csrfProtection, async (req, res) => {
-    try {
-      await authController.changePassword(req, res);
-    } catch (error) {
-      console.error('❌ Change password route error:', error);
-      res.status(500).json({
-        success: false,
-        message: "Parol o'zgartirish xatosi"
-      });
-    }
-  });
+  router.post('/change-password', verifyToken, csrfProtection, authController.changePassword);
+  
+  // ─── Foydalanuvchi holati ──────────────────────────────────────────────────
+  router.get('/user-status', verifyToken, authController.userStatus);
+
+  // ─── Foydalanuvchini aktivlashtirish (faqat admin) ────────────────────────
+  router.post('/activate-user', verifyToken, authController.isAdmin, csrfProtection, authController.activateUser);
+
+  // ─── Foydalanuvchini bloklash (faqat admin) ───────────────────────────────
+  router.post('/block-user', verifyToken, authController.isAdmin, csrfProtection, authController.blockUser);
+
+  // ─── Faol foydalanuvchilar (faqat admin) ──────────────────────────────────
+  router.get('/active-users', verifyToken, authController.isAdmin, authController.activeUsers);
+
+  // ─── Sessiya holati tekshiruvi ─────────────────────────────────────────────
+  router.post('/check-status', verifyToken, csrfProtection, authController.checkStatus);
 
   // ====================================
   // 💻 DEVICE MANAGEMENT
@@ -233,7 +258,7 @@ module.exports = (csrfProtection) => {
         success: true,
         valid: true,
         user: {
-          id: req.user.userId,
+          id: req.user.id,
           login: req.user.login,
           role: req.user.role
         }
@@ -248,6 +273,8 @@ module.exports = (csrfProtection) => {
     }
   });
 
+  router.get('/me', verifyToken, authController.getMe);
+  
   // ====================================
   // 👤 USER INFO ENDPOINTS
   // ====================================

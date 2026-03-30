@@ -1,10 +1,17 @@
 const express = require("express");
-const router = express.Router();
 const mongoose = require("mongoose");
 const { escapeRegex } = require("../utils/escapeRegex");
+const verifyToken = require('../middleware/verifyToken');
+
+module.exports = (csrfProtection) => {
+  const router = express.Router();
 
 // 🔹 Dinamik loginProducts modeli yaratish
 function getProductModel(login) {
+  // 🛡️ A03: Input validation
+  if (!/^[a-zA-Z0-9_-]+$/.test(login)) {
+    throw new Error("Login formati noto'g'ri!");
+  }
   const collectionName = `products_${login}`;
   if (mongoose.models[collectionName]) return mongoose.models[collectionName];
 
@@ -32,10 +39,17 @@ const Product = mongoose.models.Product || mongoose.model("Product", new mongoos
 }), "products");
 
 // 🔹 Scan API (barcode yoki nom orqali qidiruv)
-router.get("/scan-product/:login", async (req, res) => {
+router.get("/scan-product/:login", verifyToken, async (req, res) => {
   try {
     const { login } = req.params;
     const { barcode, name } = req.query;
+
+    // 🛡️ A01: Broken Access Control
+    const safeLogin = String(login).trim().toLowerCase();
+    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      return res.status(403).json({ message: "Ruxsat etilmagan!" });
+    }
+
     const LoginProduct = getProductModel(login);
 
     // 1️⃣ Avvalo loginProducts'dan qidirish
@@ -67,4 +81,5 @@ router.get("/scan-product/:login", async (req, res) => {
   }
 });
 
-module.exports = router;
+  return router;
+};

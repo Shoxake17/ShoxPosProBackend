@@ -1,10 +1,12 @@
 const express = require('express');
-const router = express.Router();
 const verifyToken = require('../middleware/verifyToken');
 const { isAdmin } = require('../controllers/authController');
 
 const User = require('../models/User');
 const UserSession = require('../models/UserSession');
+
+module.exports = (csrfProtection) => {
+  const router = express.Router();
 
 /**
  * @route   GET /api/admin/users
@@ -59,7 +61,7 @@ router.get('/users', verifyToken, isAdmin, async (req, res) => {
  * @route   POST /api/admin/block-user
  * @desc    Foydalanuvchini bloklash va REAL-TIME sessiyadan chiqarish
  */
-router.post('/block-user', verifyToken, isAdmin, async (req, res) => {
+router.post('/block-user', verifyToken, isAdmin, csrfProtection, async (req, res) => {
   const { userId } = req.body;
 
   if (!userId) {
@@ -96,18 +98,20 @@ router.post('/block-user', verifyToken, isAdmin, async (req, res) => {
 
     // REAL-TIME FORCE LOGOUT
     try {
-      const serverFile = require('../server');
-      const io = serverFile.io;
+      const { sendToUser } = require('../socket');
       
-      if (io) {
-        // MUHIM: Faqat o'sha userning xonasiga yuboramiz (Room = userId)
-        // Bu hamma userlar chiqib ketishining oldini oladi
-        io.to(userId.toString()).emit('forceLogout', { 
-          reason: 'blocked',
-          message: 'Hisobingiz administrator tomonidan bloklandi.' 
-        });
-        console.log(`🔴 [Socket] Force logout faqat userga yuborildi: ${user.login}`);
-      }
+      // ✅ 1. 'forceLogout' - bu eventni main.tsx kutib turibdi
+      sendToUser(user.login, 'forceLogout', { 
+        reason: 'Hisobingiz administrator tomonidan bloklandi.' 
+      });
+
+      // ✅ 2. 'user:blocked' - bu eventni ham main.tsx kutib turibdi (toast chiqarish uchun)
+      sendToUser(user.login, 'user:blocked', { 
+        login: user.login,
+        reason: 'Administrator tomonidan bloklandi' 
+      });
+
+      console.log(`🔴 [Socket] Force logout va Blocked eventlari yuborildi: ${user.login}`);
     } catch (socketErr) {
       console.warn("⚠️ Socket xatosi:", socketErr.message);
     }
@@ -127,7 +131,7 @@ router.post('/block-user', verifyToken, isAdmin, async (req, res) => {
  * @route   POST /api/admin/unblock-user
  * @desc    Foydalanuvchini blokdan chiqarish
  */
-router.post('/unblock-user', verifyToken, isAdmin, async (req, res) => {
+router.post('/unblock-user', verifyToken, isAdmin, csrfProtection, async (req, res) => {
   const { userId } = req.body;
 
   try {
@@ -170,4 +174,5 @@ router.get('/stats', verifyToken, isAdmin, async (req, res) => {
   }
 });
 
-module.exports = router;
+  return router;
+};

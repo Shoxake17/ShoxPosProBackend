@@ -17,7 +17,7 @@ const userSchema = new mongoose.Schema({
   },
   role: { 
     type: String, 
-    enum: ['admin', 'cashier', 'seller', 'user'], 
+    enum: ['admin', 'cashier'], 
     default: 'cashier' 
   },
   isDeleted: { 
@@ -89,7 +89,12 @@ const userSchema = new mongoose.Schema({
   blockedDevices: [{ 
     deviceId: String, 
     lockUntil: Date 
-  }]
+  }],
+
+  isSecret: { 
+    type: Boolean, 
+    default: false 
+  }
 
 }, { 
   timestamps: true 

@@ -1,16 +1,22 @@
-require("dotenv").config();
-
 const express = require("express");
-const router = express.Router();
 const mongoose = require("mongoose");
 const Product = require("../models/Product");
 const fetch = require("node-fetch").default;
 const { escapeRegex, sanitizeString } = require("../utils/escapeRegex");
+const verifyToken = require("../middleware/verifyToken");
+const AuditService = require("../services/auditService");
 
-// Dinamik products model
+module.exports = (csrfProtection) => {
+  const router = express.Router();
+
+  // Dinamik products model
 function getProductModel(login) {
   if (!login) {
     throw new Error("Login talab qilinadi!");
+  }
+  // 🛡️ Login inputini faqat harf-son bo'lishini tekshirish (A03)
+  if (!/^[a-zA-Z0-9_-]+$/.test(login)) {
+    throw new Error("Login formati noto'g'ri!");
   }
 
   const collectionName = `products_${login.trim().toLowerCase()}`;
@@ -57,9 +63,16 @@ function getIncomingModel(login) {
 }
 
 // 1. Yangi mahsulot qo'shish – products + incoming ga saqlash
-router.post("/add", async (req, res) => {
+router.post("/add", verifyToken, csrfProtection, async (req, res) => {
   try {
     let { name, price, basePrice, barcode, category, quantity = 0, login } = req.body;
+    
+    // 🛡️ A01: Broken Access Control - User faqat o'ziga tegishli mahsulotni qo'shishi mumkin
+    const safeLogin = String(login || '').trim().toLowerCase();
+    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      return res.status(403).json({ message: "Ruxsat etilmagan! Faqat o'zingizning mahsulotlaringizni boshqara olasiz." });
+    }
+
     name = sanitizeString(name, 300);
     category = sanitizeString(category, 200);
     barcode = sanitizeString(String(barcode || ''), 100);
@@ -87,6 +100,14 @@ router.post("/add", async (req, res) => {
     );
 
     res.json({ message: "Mahsulot muvaffaqiyatli qo'shildi", product: updated });
+    
+    // 📈 Audit log
+    await AuditService.logUserAction({
+      login: req.user.login,
+      action: 'ADD_PRODUCT',
+      status: 'SUCCESS',
+      details: { barcode, name, quantity }
+    });
   } catch (err) {
     console.error("Mahsulot qo'shishda xato:", err);
     res.status(500).json({ message: "Server xatosi" });
@@ -94,7 +115,7 @@ router.post("/add", async (req, res) => {
 });
 
 // 2. Umumiy mahsulotlarni olish
-router.get("/", async (req, res) => {
+router.get("/", verifyToken, async (req, res) => {
   try {
     const products = await Product.find({}).sort({ name: 1 });
     res.json(products);
@@ -105,10 +126,16 @@ router.get("/", async (req, res) => {
 });
 
 // 3. Foydalanuvchi mahsulotlarini olish
-router.get("/user-products/:login", async (req, res) => {
+router.get("/user-products/:login", verifyToken, async (req, res) => {
   try {
     const { login } = req.params;
     if (!login) return res.status(400).json({ message: "Login kerak!" });
+
+    // 🛡️ A01: Broken Access Control
+    const safeLogin = String(login).trim().toLowerCase();
+    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      return res.status(403).json({ message: "Ruxsat etilmagan!" });
+    }
 
     const UserProduct = getProductModel(login);
     const products = await UserProduct.find({}).sort({ name: 1 });
@@ -120,10 +147,16 @@ router.get("/user-products/:login", async (req, res) => {
 });
 
 // 4. Kirim ma'lumotlarini olish (KirimBazasi uchun)
-router.get("/incoming/:login", async (req, res) => {
+router.get("/incoming/:login", verifyToken, async (req, res) => {
   try {
     const { login } = req.params;
     if (!login) return res.status(400).json({ message: "Login kerak!" });
+
+    // 🛡️ A01: Broken Access Control
+    const safeLogin = String(login).trim().toLowerCase();
+    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      return res.status(403).json({ message: "Ruxsat etilmagan!" });
+    }
 
     const Incoming = getIncomingModel(login);
     const items = await Incoming.find({})
@@ -150,13 +183,19 @@ router.get("/incoming/:login", async (req, res) => {
 });
 
 // 5. Kirim qo'shish (agar alohida kerak bo'lsa)
-router.post("/incoming/:login", async (req, res) => {
+router.post("/incoming/:login", verifyToken, csrfProtection, async (req, res) => {
   try {
     const { login } = req.params;
     const { name, barcode, basePrice, price = 0, quantity = 1, category = "" } = req.body;
 
     if (!name || !barcode || basePrice == null) {
       return res.status(400).json({ message: "Majburiy maydonlar: name, barcode, basePrice" });
+    }
+
+    // 🛡️ A01: Broken Access Control
+    const safeLogin = String(login).trim().toLowerCase();
+    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      return res.status(403).json({ message: "Ruxsat etilmagan!" });
     }
 
     const Incoming = getIncomingModel(login);
@@ -193,11 +232,17 @@ router.post("/incoming/:login", async (req, res) => {
 });
 
 // Qolgan route'lar (update-price, delete-product, search va boshqalar)
-router.post("/update-price", async (req, res) => {
+router.post("/update-price", verifyToken, csrfProtection, async (req, res) => {
   try {
     const { barcode, newPrice, login } = req.body;
     if (!login || !barcode || newPrice == null) {
       return res.status(400).json({ message: "Login, barcode va newPrice kerak!" });
+    }
+
+    // 🛡️ A01: Broken Access Control
+    const safeLogin = String(login).trim().toLowerCase();
+    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      return res.status(403).json({ message: "Ruxsat etilmagan!" });
     }
 
     const UserProduct = getProductModel(login);
@@ -208,6 +253,14 @@ router.post("/update-price", async (req, res) => {
     );
 
     if (!updated) return res.status(404).json({ message: "Mahsulot topilmadi" });
+    
+    // 📈 Audit log
+    await AuditService.logUserAction({
+      login: req.user.login,
+      action: 'UPDATE_PRICE',
+      status: 'SUCCESS',
+      details: { barcode, newPrice }
+    });
 
     res.json({ message: "Narx yangilandi", product: updated });
   } catch (err) {
@@ -216,11 +269,17 @@ router.post("/update-price", async (req, res) => {
   }
 });
 
-router.post("/update-quantity", async (req, res) => {
+router.post("/update-quantity", verifyToken, csrfProtection, async (req, res) => {
   try {
     const { barcode, newQuantity, login } = req.body;
     if (!login || !barcode || newQuantity == null) {
       return res.status(400).json({ message: "Login, barcode va newQuantity kerak!" });
+    }
+
+    // 🛡️ A01: Broken Access Control
+    const safeLogin = String(login).trim().toLowerCase();
+    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      return res.status(403).json({ message: "Ruxsat etilmagan!" });
     }
 
     const UserProduct = getProductModel(login);
@@ -232,6 +291,14 @@ router.post("/update-quantity", async (req, res) => {
 
     if (!updated) return res.status(404).json({ message: "Mahsulot topilmadi" });
 
+    // 📈 Audit log
+    await AuditService.logUserAction({
+      login: req.user.login,
+      action: 'UPDATE_QUANTITY',
+      status: 'SUCCESS',
+      details: { barcode, newQuantity }
+    });
+
     res.json({ message: "Miqdor yangilandi", product: updated });
   } catch (err) {
     console.error("Miqdor yangilash xatosi:", err);
@@ -239,11 +306,17 @@ router.post("/update-quantity", async (req, res) => {
   }
 });
 
-router.post("/delete-product", async (req, res) => {
+router.post("/delete-product", verifyToken, csrfProtection, async (req, res) => {
   try {
     const { barcode, login } = req.body;
     if (!login || !barcode) {
       return res.status(400).json({ message: "Login va barcode kerak!" });
+    }
+
+    // 🛡️ A01: Broken Access Control
+    const safeLogin = String(login).trim().toLowerCase();
+    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      return res.status(403).json({ message: "Ruxsat etilmagan!" });
     }
 
     const UserProduct = getProductModel(login);
@@ -252,6 +325,14 @@ router.post("/delete-product", async (req, res) => {
     if (result.deletedCount === 0) {
       return res.status(404).json({ message: "Mahsulot topilmadi" });
     }
+
+    // 📈 Audit log
+    await AuditService.logUserAction({
+      login: req.user.login,
+      action: 'DELETE_PRODUCT',
+      status: 'SUCCESS',
+      details: { barcode }
+    });
 
     res.json({ message: "Mahsulot foydalanuvchi ro'yxatidan o'chirildi" });
   } catch (err) {
@@ -300,11 +381,17 @@ router.get("/count", async (req, res) => {
 });
 
 // Ulgurji narxni (basePrice) yangilash uchun alohida endpoint
-router.post("/update-base-price", async (req, res) => {
+router.post("/update-base-price", verifyToken, csrfProtection, async (req, res) => {
   try {
     const { barcode, newBasePrice, login } = req.body;
     if (!login || !barcode || newBasePrice == null) {
       return res.status(400).json({ message: "Login, barcode va newBasePrice kerak!" });
+    }
+
+    // 🛡️ A01: Broken Access Control
+    const safeLogin = String(login).trim().toLowerCase();
+    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      return res.status(403).json({ message: "Ruxsat etilmagan!" });
     }
 
     const UserProduct = getProductModel(login);
@@ -324,11 +411,17 @@ router.post("/update-base-price", async (req, res) => {
 });
 
 // Kirim miqdorini faqat qo'shish (minus bo'lmasin)
-router.post("/add-quantity", async (req, res) => {
+router.post("/add-quantity", verifyToken, csrfProtection, async (req, res) => {
   try {
     const { barcode, addAmount, login } = req.body;
     if (!login || !barcode || !addAmount || addAmount <= 0) {
       return res.status(400).json({ message: "Login, barcode va musbat addAmount kerak!" });
+    }
+
+    // 🛡️ A01: Broken Access Control
+    const safeLogin = String(login).trim().toLowerCase();
+    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      return res.status(403).json({ message: "Ruxsat etilmagan!" });
     }
 
     const UserProduct = getProductModel(login);
@@ -353,11 +446,17 @@ router.post("/add-quantity", async (req, res) => {
 
 
 // Qo'shilgan sanani o'zgartirish
-router.post("/update-date", async (req, res) => {
+router.post("/update-date", verifyToken, csrfProtection, async (req, res) => {
   try {
     const { barcode, newDate, login } = req.body; // newDate – string (masalan: "28.12.2025")
     if (!login || !barcode) {
       return res.status(400).json({ message: "Login va barcode kerak!" });
+    }
+
+    // 🛡️ A01: Broken Access Control
+    const safeLogin = String(login).trim().toLowerCase();
+    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      return res.status(403).json({ message: "Ruxsat etilmagan!" });
     }
 
     const UserProduct = getProductModel(login);
@@ -376,9 +475,15 @@ router.post("/update-date", async (req, res) => {
   }
 });
 
-router.get("/lookup", async (req, res) => {
-  const { barcode } = req.query;
+router.get("/lookup", verifyToken, async (req, res) => {
+  let { barcode } = req.query;
   if (!barcode) return res.status(400).json({ message: "Barcode kerak!" });
+
+  // 🛡️ A10: SSRF & Input Validation - Barcode faqat raqam va harflardan iborat bo'lishi kerak
+  barcode = String(barcode).trim();
+  if (!/^[a-zA-Z0-9]+$/.test(barcode)) {
+    return res.status(400).json({ message: "Barcode formati noto'g'ri!" });
+  }
 
   try {
     const offRes = await fetch(`https://world.openfoodfacts.org/api/v0/product/${barcode}.json`);
@@ -410,4 +515,5 @@ router.get("/lookup", async (req, res) => {
   }
 });
 
-module.exports = router;
+  return router;
+};

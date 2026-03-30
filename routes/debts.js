@@ -1,9 +1,16 @@
 const express = require("express");
-const router = express.Router();
 const mongoose = require("mongoose");
+const verifyToken = require('../middleware/verifyToken');
+
+module.exports = (csrfProtection) => {
+  const router = express.Router();
 
 // Dinamik Qarzlar modeli
 function getDebtsModel(login) {
+  // 🛡️ A03: Input validation
+  if (!/^[a-zA-Z0-9_-]+$/.test(login)) {
+    throw new Error("Login formati noto'g'ri!");
+  }
   const collectionName = `debts_${login}`;
   
   // Agar model allaqachon yaratilgan bo'lsa, qaytar
@@ -22,9 +29,16 @@ function getDebtsModel(login) {
 }
 
 // Barcha qarzlarni olish
-router.get("/debts/:login", async (req, res) => {
+router.get("/debts/:login", verifyToken, async (req, res) => {
   try {
     const { login } = req.params;
+    
+    // 🛡️ A01: Broken Access Control
+    const safeLogin = String(login).trim().toLowerCase();
+    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      return res.status(403).json({ message: "Ruxsat etilmagan!" });
+    }
+
     const Debts = getDebtsModel(login);
 
     const debts = await Debts.find({}).sort({ lastPayment: -1 }).lean();
@@ -45,10 +59,16 @@ router.get("/debts/:login", async (req, res) => {
 });
 
 // Yangi qarz qo'shish
-router.post("/debts/:login", async (req, res) => {
+router.post("/debts/:login", verifyToken, csrfProtection, async (req, res) => {
   try {
     const { login } = req.params;
     const { name, phone, amount } = req.body;
+
+    // 🛡️ A01: Broken Access Control
+    const safeLogin = String(login).trim().toLowerCase();
+    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      return res.status(403).json({ message: "Ruxsat etilmagan!" });
+    }
 
     if (!name || !name.trim() || !phone || !amount || amount <= 0) {
       return res.status(400).json({ message: "Ma'lumotlar to'liq emas yoki noto'g'ri" });
@@ -76,10 +96,16 @@ router.post("/debts/:login", async (req, res) => {
 });
 
 // To'lov qilish (qisman yoki to'liq)
-router.post("/debts/pay/:login", async (req, res) => {
+router.post("/debts/pay/:login", verifyToken, csrfProtection, async (req, res) => {
   try {
     const { login } = req.params;
     const { debtId, paymentAmount } = req.body;
+
+    // 🛡️ A01: Broken Access Control
+    const safeLogin = String(login).trim().toLowerCase();
+    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      return res.status(403).json({ message: "Ruxsat etilmagan!" });
+    }
 
     if (!debtId || !paymentAmount || paymentAmount <= 0) {
       return res.status(400).json({ message: "To'lov ma'lumotlari noto'g'ri" });
@@ -116,5 +142,5 @@ router.post("/debts/pay/:login", async (req, res) => {
   }
 });
 
-// Muhim: router ni eksport qilish
-module.exports = router;
+  return router;
+};

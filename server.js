@@ -1,6 +1,4 @@
 // server.js
-require('dotenv').config();
-
 const express    = require('express');
 const http       = require('http');
 const socketIo   = require('socket.io');
@@ -19,15 +17,17 @@ const User                   = require('./models/User');
 const verifyToken            = require('./middleware/verifyToken');
 const TokenBlacklistService  = require('./services/tokenBlacklistService');
 const authController         = require('./controllers/authController');
-const cashbackProxy          = require('./routes/cashbackProxy');
 
 connectDB();
 
-const app    = express();
+const app = express();
 const server = http.createServer(app);
 
+// ✅ Proxy orqasidagiligini bildirish (secure cookie va IP uchun)
+app.set('trust proxy', 1);
+
 // ====================================
-// 🔐 CORS
+// 🔒 CORS SOZLAMALARI
 // ====================================
 const allowedOrigins = [
   'https://shoxpospro.uz',
@@ -54,8 +54,8 @@ app.use(cors({
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   // ✅ Faqat 'CSRF-Token' — 'X-CSRF-Token' o'chirildi (server bilan bir xil)
-  allowedHeaders: ['Content-Type', 'Authorization', 'CSRF-Token', 'X-Requested-With'],
-  exposedHeaders: ['CSRF-Token'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'CSRF-Token', 'X-CSRF-Token', 'X-Requested-With'],
+  exposedHeaders: ['CSRF-Token', 'X-CSRF-Token'],
 }));
 
 // ====================================
@@ -65,14 +65,27 @@ app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc:  ["'self'"],
+      baseUri:    ["'self'"],
+      scriptSrc:  ["'self'", 'https://cdn.jsdelivr.net'],
       styleSrc:   ["'self'", "'unsafe-inline'"],
-      imgSrc:     ["'self'", "data:", "https:"],
-      connectSrc: ["'self'"],
-      fontSrc:    ["'self'"],
+      imgSrc:     ["'self'", "data:", "https:", "blob:"],
+      connectSrc: [
+        "'self'",
+        'ws:',
+        'wss:',
+        'https://cdn.jsdelivr.net',
+        'https://freeipapi.com',
+        'https://ipapi.co',
+        'https://flagcdn.com',
+        'https://api.anthropic.com',
+        'https://generativelanguage.googleapis.com',
+        'https://api.x.ai',
+      ],
+      fontSrc:    ["'self'", 'data:'],
       objectSrc:  ["'none'"],
       mediaSrc:   ["'self'"],
       frameSrc:   ["'none'"],
+      frameAncestors: ["'none'"],
     },
   },
   crossOriginEmbedderPolicy: true,
@@ -118,9 +131,18 @@ const csrfProtection = csrf({
   cookie: {
     key:      '_csrf',
     httpOnly: true,
-    secure:   config.NODE_ENV === 'production',
-    sameSite: config.NODE_ENV === 'production' ? 'strict' : 'lax',
+    secure:   config.NODE_ENV === 'production', 
+    sameSite: 'lax', 
+    path:     '/',
   },
+  value: (req) => {
+    return req.headers['csrf-token'] || 
+           req.headers['x-csrf-token'] || 
+           req.headers['xsrf-token'] || 
+           req.headers['x-xsrf-token'] || 
+           (req.body && req.body._csrf) ||
+           req.query?._csrf;
+  }
 });
 
 // ====================================
@@ -130,8 +152,8 @@ const apiLimiter = require('./middleware/apiRateLimit');
 
 // ✅ CSRF token uchun alohida rate limit — brute-force oldini olish
 const csrfLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 daqiqa
-  max: 30,                   // 15 daqiqada 30 ta so'rov
+  windowMs: 10 * 60 * 1000, // 10 daqiqa
+  max: 100,                  // 10 daqiqada 100 ta so'rov (recovery loop uchun yetarli)
   standardHeaders: true,
   legacyHeaders: false,
   message: { message: 'Juda ko\'p so\'rov. Keyinroq urinib ko\'ring.' },
@@ -164,20 +186,33 @@ app.use((req, res, next) => {
   next();
 });
 
+// ✅ CSRF Xatolarini tutish uchun maxsus middleware
+app.use((err, req, res, next) => {
+  if (err.code === 'EBADCSRFTOKEN') {
+    return res.status(403).json({
+      success: false,
+      message: 'CSRF token noto\'g\'ri yoki mavjud emas. Iltimos, sahifani yangilang.'
+    });
+  }
+  next(err);
+});
+
 // ====================================
 // 🛣️ ROUTERLAR
 // ====================================
-const productRoutes       = require('./routes/productRoutes');
-const loginProductRoutes  = require('./routes/loginProducts');
-const scanProductsRouter  = require('./routes/scanProducts');
-const aiRoutes            = require('./routes/aiRoutes');
+const productRoutes       = require('./routes/productRoutes')(csrfProtection);
+const loginProductRoutes  = require('./routes/loginProducts')(csrfProtection);
+const scanProductsRouter  = require('./routes/scanProducts')(csrfProtection);
+const aiRoutes            = require('./routes/aiRoutes')(csrfProtection);
 const authRouter          = require('./routes/auth')(csrfProtection);
-const debtsRoutes         = require('./routes/debts');
-const salesRoutes         = require('./routes/salesRoutes');
-const biometricRouter     = require('./routes/biometricRoutes');
+const debtsRoutes         = require('./routes/debts')(csrfProtection);
+const salesRoutes         = require('./routes/salesRoutes')(csrfProtection);
+const biometricRouter     = require('./routes/biometricRoutes')(csrfProtection);
 const printerRoutes       = require('./routes/printerRoutes')(io);
-const authenticatorRouter = require('./routes/authenticatorRoutes');
-const adminRoutes         = require('./routes/adminRoutes');
+const authenticatorRouter = require('./routes/authenticatorRoutes')(csrfProtection);
+const cashbackProxy       = require('./routes/cashbackProxy')(csrfProtection);
+const adminRoutes         = require('./routes/adminRoutes')(csrfProtection);
+const userChatRoutes      = require('./routes/userChatRoutes')(csrfProtection, io);
 const { router: metricsRouter } = require('./routes/metrics');
 
 app.use('/metrics',          metricsRouter);
@@ -185,6 +220,7 @@ app.use('/api',              authRouter);
 app.use('/api',              biometricRouter);
 app.use('/api/google-auth',  authenticatorRouter);
 app.use('/api',              aiRoutes);
+app.use('/api/chat',         userChatRoutes.router);
 app.use('/api/printer',      printerRoutes);
 app.use('/api/products',     loginProductRoutes);
 app.use('/api/products',     productRoutes);
@@ -200,220 +236,9 @@ if (config.NODE_ENV === 'development') {
 }
 
 // ====================================
-// 📦 API ENDPOINTLAR
-// ====================================
-
-// ─── Foydalanuvchi holati ──────────────────────────────────────────────────
-app.get('/api/user-status', verifyToken, async (req, res) => {
-  const login = req.query.login;
-  if (!login) return res.status(400).json({ error: 'Login kerak' });
-
-  const safeLogin = String(login).trim().toLowerCase();
-
-  if (req.user.login !== safeLogin && req.user.role !== 'admin') {
-    return res.status(403).json({ error: "Ruxsat yo'q" });
-  }
-  try {
-    const user = await User.findOne({ login: safeLogin }).select('-password');
-    if (!user) return res.status(404).json({ error: 'Foydalanuvchi topilmadi' });
-    res.json(user);
-  } catch (err) {
-    if (config.NODE_ENV === 'development') console.error('❌ user-status:', err);
-    res.status(500).json({ error: 'Server xatosi' });
-  }
-});
-
-// ─── Foydalanuvchini aktivlashtirish (faqat admin) ────────────────────────
-app.post('/api/activate-user', verifyToken, authController.isAdmin, csrfProtection, async (req, res) => {
-  const { login } = req.body;
-  if (!login) return res.status(400).json({ message: 'Login kerak' });
-
-  const safeLogin = String(login).trim().toLowerCase();
-
-  try {
-    const user = await User.findOneAndUpdate(
-      { login: safeLogin },
-      { blocked: false, active: true },
-      { new: true }
-    );
-    if (!user) return res.status(404).json({ message: 'Foydalanuvchi topilmadi!' });
-
-    const socketIds = getUserSockets()[safeLogin];
-    if (socketIds?.length > 0) {
-      socketIds.forEach(id => io.to(id).emit('userActivated'));
-    }
-
-    // ✅ login response'da qaytarilmaydi
-    res.json({ message: "Foydalanuvchi blokdan chiqarildi va aktiv qilindi." });
-  } catch (err) {
-    if (config.NODE_ENV === 'development') console.error('❌ activate-user:', err);
-    res.status(500).json({ message: 'Server xatosi' });
-  }
-});
-
-// ─── Logout ───────────────────────────────────────────────────────────────
-app.post('/api/logout', verifyToken, csrfProtection, async (req, res) => {
-  try {
-    const { login, deviceId } = req.body;
-    if (!login || !deviceId) {
-      return res.status(400).json({ message: 'Login va deviceId kerak' });
-    }
-
-    const safeLogin = String(login).trim().toLowerCase();
-
-    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
-      return res.status(403).json({ message: "Ruxsat yo'q" });
-    }
-
-    const user = await User.findOne({ login: safeLogin });
-    if (!user) return res.status(404).json({ message: 'Foydalanuvchi topilmadi.' });
-
-    if (user.desktopDeviceId === deviceId) user.desktopDeviceId = null;
-    if (user.mobileDeviceId  === deviceId) user.mobileDeviceId  = null;
-    user.active = false;
-
-    if (user.devices) {
-      const device = user.devices.find(d => d.deviceId === deviceId);
-      if (device?.token) {
-        await TokenBlacklistService.add(device.token, { login: safeLogin, deviceId, reason: 'logout' });
-      }
-      user.devices = user.devices.map(d =>
-        d.deviceId === deviceId ? { ...d, isActive: false, token: null } : d
-      );
-    }
-
-    await user.save();
-    return res.status(200).json({ success: true, message: 'Logout muvaffaqiyatli!' });
-  } catch (err) {
-    if (config.NODE_ENV === 'development') console.error('❌ logout:', err);
-    return res.status(500).json({ success: false, message: 'Server xatosi' });
-  }
-});
-
-// ─── Foydalanuvchini bloklash (faqat admin) ───────────────────────────────
-app.post('/api/block-user', verifyToken, authController.isAdmin, csrfProtection, async (req, res) => {
-  const { login } = req.body;
-  if (!login) return res.status(400).json({ message: 'Login kerak' });
-
-  const safeLogin = String(login).trim().toLowerCase();
-
-  try {
-    const user = await User.findOneAndUpdate(
-      { login: safeLogin },
-      { blocked: true, active: false },
-      { new: true }
-    );
-    if (!user) return res.status(404).json({ message: 'Foydalanuvchi topilmadi!' });
-
-    const socketIds = getUserSockets()[safeLogin];
-    if (socketIds?.length > 0) {
-      socketIds.forEach(id => {
-        // ✅ login socket eventda yuborilmaydi
-        io.to(id).emit('forceLogout', { reason: 'Administrator tomonidan bloklandi' });
-      });
-    }
-
-    // ✅ login response'da qaytarilmaydi
-    res.json({ message: 'Foydalanuvchi bloklandi.' });
-  } catch (err) {
-    if (config.NODE_ENV === 'development') console.error('❌ block-user:', err);
-    res.status(500).json({ message: 'Server xatosi' });
-  }
-});
-
-// ─── Faol foydalanuvchilar (faqat admin) ──────────────────────────────────
-app.get('/api/active-users', verifyToken, authController.isAdmin, async (req, res) => {
-  try {
-    const users = await User.find({}).select('-password');
-    res.json(users);
-  } catch (err) {
-    if (config.NODE_ENV === 'development') console.error('❌ active-users:', err);
-    res.status(500).json({ message: 'Server xatosi' });
-  }
-});
-
-// ─── Sessiya holati tekshiruvi ─────────────────────────────────────────────
-app.post('/api/check-status', verifyToken, csrfProtection, async (req, res) => {
-  const { login, deviceId } = req.body;
-  if (!login || !deviceId) {
-    return res.status(400).json({ active: false, reason: 'Login va deviceId kerak' });
-  }
-
-  const safeLogin = String(login).trim().toLowerCase();
-
-  if (req.user.login !== safeLogin && req.user.role !== 'admin') {
-    return res.status(403).json({ active: false, reason: "Ruxsat yo'q" });
-  }
-  try {
-    const user = await User.findOne({ login: safeLogin });
-    if (!user)        return res.json({ active: false, reason: 'Foydalanuvchi topilmadi' });
-    if (user.blocked) return res.json({ active: false, reason: 'Siz bloklangansiz!' });
-    if (user.desktopDeviceId !== deviceId && user.mobileDeviceId !== deviceId) {
-      return res.json({ active: false, reason: "Noto'g'ri sessiya!" });
-    }
-    return res.json({ active: user.active });
-  } catch (err) {
-    if (config.NODE_ENV === 'development') console.error('❌ check-status:', err);
-    res.status(500).json({ active: false, reason: 'Server xatosi' });
-  }
-});
-
-// ─── Qurilmani tasdiqlash ──────────────────────────────────────────────────
-app.post('/api/confirm-login', verifyToken, csrfProtection, async (req, res) => {
-  const { login, deviceId, confirm } = req.body;
-  if (!login || !deviceId) {
-    return res.status(400).json({ message: 'Login va deviceId kerak' });
-  }
-
-  const safeLogin = String(login).trim().toLowerCase();
-
-  if (req.user.login !== safeLogin && req.user.role !== 'admin') {
-    return res.status(403).json({ message: "Ruxsat yo'q" });
-  }
-  try {
-    const user = await User.findOne({ login: safeLogin });
-    if (!user)    return res.status(404).json({ message: 'Foydalanuvchi topilmadi' });
-    if (!confirm) return res.json({ message: 'Qurilma rad etildi, kirish bekor qilindi.' });
-
-    if (req.user.role !== 'admin') {
-      const deviceBelongsToUser = user.devices?.some(d => d.deviceId === deviceId);
-      if (!deviceBelongsToUser && config.NODE_ENV === 'development') {
-        console.log(`ℹ️ Yangi qurilma tasdiqlanyapti: ${deviceId}`);
-      }
-    }
-
-    const oldDeviceIds = [];
-    if (user.mobileDeviceId  && user.mobileDeviceId  !== deviceId) oldDeviceIds.push(user.mobileDeviceId);
-    if (user.desktopDeviceId && user.desktopDeviceId !== deviceId) oldDeviceIds.push(user.desktopDeviceId);
-
-    const userAgent = req.headers['user-agent'] || '';
-    if (/mobile/i.test(userAgent)) {
-      user.mobileDeviceId = deviceId;
-    } else {
-      user.desktopDeviceId = deviceId;
-    }
-    user.active = true;
-    await user.save();
-
-    oldDeviceIds.forEach(() => {
-      const socketIds = getUserSockets()[safeLogin] || [];
-      socketIds.forEach(sid => {
-        // ✅ login yuborilmaydi
-        io.to(sid).emit('requestDeviceConfirm', { newDeviceId: deviceId });
-      });
-    });
-
-    res.json({ message: "Qurilma tasdiqlandi va sessiya o'tkazildi." });
-  } catch (err) {
-    if (config.NODE_ENV === 'development') console.error('❌ confirm-login:', err);
-    res.status(500).json({ message: 'Server xatosi' });
-  }
-});
-
-// ====================================
 // 🌐 CATCH-ALL (SPA)
 // ====================================
-app.get('*', (req, res, next) => {
+app.get(/^(?!\/api).+/, (req, res, next) => {
   if (req.path.startsWith('/api')) return next();
   const indexPath = path.join(__dirname, 'public', 'dist', 'index.html');
   if (fs.existsSync(indexPath)) {
@@ -480,4 +305,4 @@ process.on('SIGTERM', () => {
   });
 });
 
-module.exports = { io, server };
+module.exports = { app, server, io };

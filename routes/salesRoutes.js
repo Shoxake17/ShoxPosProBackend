@@ -1,11 +1,20 @@
 const express = require('express');
-const router = express.Router();
 const mongoose = require('mongoose');
-// 📈 Prometheus metrikalarini import qilamiz
-const { totalSales, totalCashbackGiven } = require('./metrics'); 
+const verifyToken = require('../middleware/verifyToken');
+const AuditService = require('../services/auditService');
+
+module.exports = (csrfProtection) => {
+  const router = express.Router();
+
+  // 📈 Prometheus metrikalarini import qilamiz
+  const { totalSales, totalCashbackGiven } = require('./metrics'); 
 
 // 🔹 Dinamik Product model
 function getProductModel(login) {
+  // 🛡️ A03: Input validation
+  if (!/^[a-zA-Z0-9_-]+$/.test(login)) {
+    throw new Error("Login formati noto'g'ri!");
+  }
   const collectionName = `products_${login}`;
   const modelName = `Product_${login}`;
   if (mongoose.models[modelName]) return mongoose.models[modelName];
@@ -41,10 +50,16 @@ function getSalesModel(login) {
 }
 
 // ✅ Sotuvlarni saqlash - To'liq Monitoring bilan
-router.post('/sell-product/:login', async (req, res) => {
+router.post('/sell-product/:login', verifyToken, csrfProtection, async (req, res) => {
   try {
     const { login } = req.params;
     const { sales, paymentMethod, cashbackAmount } = req.body;
+
+    // 🛡️ A01: Broken Access Control
+    const safeLogin = String(login).trim().toLowerCase();
+    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Ruxsat etilmagan!' });
+    }
 
     if (!sales || !Array.isArray(sales) || sales.length === 0) {
       return res.status(400).json({ success: false, message: 'Sales bo\'sh yoki noto\'g\'ri formatda' });
@@ -124,6 +139,14 @@ router.post('/sell-product/:login', async (req, res) => {
       sales: savedSales
     });
 
+    // 📈 Audit log
+    await AuditService.logUserAction({
+      login: req.user.login,
+      action: 'SELL_PRODUCT',
+      status: 'SUCCESS',
+      details: { count: savedSales.length, paymentMethod: pMethod }
+    });
+
   } catch (err) {
     console.error("❌ Sell-product xatosi:", err);
     res.status(500).json({ success: false, message: "Server xatosi", error: err.message });
@@ -131,9 +154,16 @@ router.post('/sell-product/:login', async (req, res) => {
 });
 
 // ✅ Boshqa GET/DELETE route'lari (o'zgarishsiz qoladi)
-router.get('/sales/:login', async (req, res) => {
+router.get('/sales/:login', verifyToken, async (req, res) => {
   try {
     const { login } = req.params;
+    
+    // 🛡️ A01: Broken Access Control
+    const safeLogin = String(login).trim().toLowerCase();
+    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Ruxsat etilmagan!' });
+    }
+
     const Sales = getSalesModel(login);
     const reports = await Sales.find().sort({ soldAt: -1 }).lean();
     res.json(reports);
@@ -142,10 +172,17 @@ router.get('/sales/:login', async (req, res) => {
   }
 });
 
-router.get('/sales/:login/by-date', async (req, res) => {
+router.get('/sales/:login/by-date', verifyToken, async (req, res) => {
   try {
     const { login } = req.params;
     const { startDate, endDate } = req.query;
+
+    // 🛡️ A01: Broken Access Control
+    const safeLogin = String(login).trim().toLowerCase();
+    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Ruxsat etilmagan!' });
+    }
+
     const Sales = getSalesModel(login);
     const query = {};
     if (startDate || endDate) {
@@ -160,9 +197,16 @@ router.get('/sales/:login/by-date', async (req, res) => {
   }
 });
 
-router.get('/sales/:login/stats', async (req, res) => {
+router.get('/sales/:login/stats', verifyToken, async (req, res) => {
   try {
     const { login } = req.params;
+
+    // 🛡️ A01: Broken Access Control
+    const safeLogin = String(login).trim().toLowerCase();
+    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Ruxsat etilmagan!' });
+    }
+
     const Sales = getSalesModel(login);
     const stats = await Sales.aggregate([
       { $group: { _id: '$category', totalSales: { $sum: '$total' }, totalQuantity: { $sum: '$quantity' }, count: { $sum: 1 } } },
@@ -174,16 +218,33 @@ router.get('/sales/:login/stats', async (req, res) => {
   }
 });
 
-router.delete('/sales/:login/:id', async (req, res) => {
+router.delete('/sales/:login/:id', verifyToken, csrfProtection, async (req, res) => {
   try {
     const { login, id } = req.params;
+
+    // 🛡️ A01: Broken Access Control
+    const safeLogin = String(login).trim().toLowerCase();
+    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Ruxsat etilmagan!' });
+    }
+
     const Sales = getSalesModel(login);
     const deleted = await Sales.findByIdAndDelete(id);
     if (!deleted) return res.status(404).json({ success: false, error: 'Sotuv topilmadi' });
+    
+    // 📈 Audit log
+    await AuditService.logUserAction({
+      login: req.user.login,
+      action: 'DELETE_SALE',
+      status: 'SUCCESS',
+      details: { saleId: id }
+    });
+
     res.json({ success: true, message: 'Sotuv o\'chirildi' });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-module.exports = router;
+  return router;
+};

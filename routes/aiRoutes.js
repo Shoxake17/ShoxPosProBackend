@@ -1,8 +1,86 @@
 const express = require('express');
-const router = express.Router();
 const mongoose = require('mongoose');
+const axios = require('axios');
+const verifyToken = require('../middleware/verifyToken');
+const ChatHistory = require('../models/ChatHistory');
+const { encryptAndCompress, decryptAndDecompress } = require('../utils/chatCrypto');
 
-// Dinamik Sales model
+module.exports = (csrfProtection) => {
+  const router = express.Router();
+
+// ─── Chat Tarixi Funksiyalari (Bucket Pattern + Encryption) ───────────
+
+/** Xabarni saqlash (Optimallashtirilgan: Butun massivni bitta shifrda saqlash) */
+async function saveChatMessage(login, role, content, modelId = 'shox-ai') {
+  try {
+    // Oxirgi to'lmagan bucketni topish
+    let bucket = await ChatHistory.findOne({ login, isFull: false }).sort({ bucketId: -1 });
+
+    let messages = [];
+    if (bucket) {
+      try {
+        messages = JSON.parse(decryptAndDecompress(bucket.encryptedMessages));
+      } catch (e) {
+        console.error('Bucket dekripsiya xatosi, yangi massiv boshlanmoqda');
+        messages = [];
+      }
+    } else {
+      const lastBucket = await ChatHistory.findOne({ login }).sort({ bucketId: -1 });
+      const newBucketId = lastBucket ? lastBucket.bucketId + 1 : 0;
+      bucket = new ChatHistory({ login, bucketId: newBucketId, encryptedMessages: '' });
+    }
+
+    // Yangi xabarni qo'shish
+    messages.push({ 
+      role, 
+      content, // Asl matn (saqlashdan oldin hammasi birga shifrlanadi)
+      modelId,
+      timestamp: new Date()
+    });
+
+    // Butun massivni siqish va shifrlash
+    bucket.encryptedMessages = encryptAndCompress(JSON.stringify(messages));
+    bucket.count = messages.length;
+
+    if (bucket.count >= 500) {
+      bucket.isFull = true;
+    }
+
+    await bucket.save();
+  } catch (err) {
+    console.error('Chat saqlashda xato:', err.message);
+  }
+}
+
+/** Tarixni olish (Optimallashtirilgan) */
+async function getChatHistory(login) {
+  try {
+    const buckets = await ChatHistory.find({ login }).sort({ bucketId: 1 }).lean();
+    const allMessages = [];
+    
+    for (const bucket of buckets) {
+      try {
+        const messages = JSON.parse(decryptAndDecompress(bucket.encryptedMessages));
+        for (const msg of messages) {
+          allMessages.push({
+            role: msg.role === 'assistant' ? 'ai' : 'user',
+            content: msg.content,
+            modelId: msg.modelId || 'shox-ai',
+            timestamp: msg.timestamp
+          });
+        }
+      } catch (e) {
+        console.error(`Bucket ${bucket.bucketId} o'qishda xato:`, e.message);
+      }
+    }
+    return allMessages;
+  } catch (err) {
+    console.error('Tarixni olishda xato:', err.message);
+    return [];
+  }
+}
+
+// ─── Dinamik Modellar ──────────────────────────────────────────────────
 function getSalesModel(login) {
   const collectionName = `sales_${login}`;
   const modelName = `Sale_${login}`;
@@ -199,84 +277,268 @@ ${debtsContext}
   }
 }
 
-// 📌 OpenAI ChatGPT endpoint
-router.post('/ask-openai', async (req, res) => {
-  const { question, login, systemOverride } = req.body;
-  if (!question) return res.status(400).json({ error: 'Savol kiritilmagan' });
+// 📌 Chat tarixini olish
+router.get('/ai/history/:login', verifyToken, async (req, res) => {
+  const { login } = req.params;
+  const safeLogin = String(login).trim().toLowerCase();
+  if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+    return res.status(403).json({ error: "Ruxsat etilmagan!" });
+  }
+  const history = await getChatHistory(safeLogin);
+  res.json(history);
+});
+
+// 📌 Chat tarixini tozalash
+router.delete('/ai/history/:login', verifyToken, csrfProtection, async (req, res) => {
+  const { login } = req.params;
+  const safeLogin = String(login).trim().toLowerCase();
+  if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+    return res.status(403).json({ error: "Ruxsat etilmagan!" });
+  }
+  await ChatHistory.deleteMany({ login: safeLogin });
+  res.json({ success: true, message: "Tarix tozalandi" });
+});
+
+// 📌 Groq AI endpoint
+router.post('/ask-groq-ai', verifyToken, csrfProtection, async (req, res) => {
+  console.log(`[AI] Groq request: ${req.body.login}, model: ${req.body.groqModel}`);
+  const { question, login, groqModel, systemOverride, modelId: feModelId } = req.body;
+  if (!question || !login) return res.status(400).json({ error: 'Savol va login kiritilmagan' });
+
+  const safeLogin = String(login).trim().toLowerCase();
+  if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+    return res.status(403).json({ error: "Ruxsat etilmagan!" });
+  }
 
   try {
+    if (!process.env.GROQ_API_KEY) {
+      console.error("❌ [Groq] API Key topilmadi");
+      throw new Error("GROQ_API_KEY topilmadi. Iltimos, server sozlamalarini tekshiring.");
+    }
+
+    const groqModelId = groqModel || 'llama-3.3-70b-versatile';
+    const historyModelId = feModelId || groqModelId;
+    console.log(`[Groq] Saving user message...`);
+    await saveChatMessage(safeLogin, 'user', question, historyModelId);
+
+    let systemPrompt = systemOverride || 'Sen do\'kon boshqaruv tizimining AI yordamchisisisan. O\'zbek tilida javob ber.';
+    if (!systemOverride && login && needsData(question)) {
+      console.log(`[Groq] Building context...`);
+      const context = await buildFullContext(login);
+      systemPrompt += `\n${context}`;
+    }
+
+    console.log(`[Groq] Calling Groq API with model: ${groqModelId}`);
+    const response = await axios.post("https://api.groq.com/openai/v1/chat/completions", {
+      model: groqModelId,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: question }
+      ]
+    }, {
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${process.env.GROQ_API_KEY}`
+      },
+      timeout: 30000 // 30 soniya timeout
+    });
+
+    const answer = response.data.choices?.[0]?.message?.content || "❌ Javob olinmadi";
+
+    await saveChatMessage(safeLogin, 'assistant', answer, historyModelId);
+    res.json({ answer });
+  } catch (error) {
+    let errorMsg = "Groq bilan aloqa xatosi";
+    if (error.response) {
+      // API dan kelgan xato
+      errorMsg = error.response.data?.error?.message || `Groq API Error: ${error.response.status}`;
+      console.error(`❌ Groq API xatosi (${error.response.status}):`, JSON.stringify(error.response.data));
+    } else if (error.request) {
+      // So'rov yuborildi, lekin javob kelmadi
+      errorMsg = "Groq serveridan javob olinmadi (Network error)";
+      console.error(`❌ Groq Network xatosi:`, error.message);
+    } else {
+      // Boshqa xato
+      errorMsg = error.message;
+      console.error(`❌ Groq Controller xatosi:`, error.message);
+    }
+
+    res.status(500).json({ 
+      error: errorMsg,
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  }
+});
+
+// 📌 OpenAI ChatGPT endpoint
+router.post('/ask-openai', verifyToken, csrfProtection, async (req, res) => {
+  const { question, login, systemOverride, modelId: feModelId } = req.body;
+  if (!question || !login) return res.status(400).json({ error: 'Savol va login kiritilmagan' });
+
+  const safeLogin = String(login).trim().toLowerCase();
+  if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+    return res.status(403).json({ error: "Ruxsat etilmagan!" });
+  }
+
+  try {
+    const historyModelId = feModelId || 'gpt-4o-mini';
+    // User xabarini saqlash
+    await saveChatMessage(safeLogin, 'user', question, historyModelId);
+
     let systemPrompt = systemOverride || '';
     if (!systemOverride && login && needsData(question)) {
       const context = await buildFullContext(login);
-      systemPrompt = `Sen do'kon boshqaruv tizimining AI yordamchisisisan. O'zbek tilida javob ber. ${context}`;
+      systemPrompt = `Men Shoxrux tomonidan yaratilgan ShoxAi modeliman. Do'kon boshqaruv tizimining professional AI yordamchisisiman.\n\n${context}`;
     } else if (!systemOverride) {
-      systemPrompt = 'Sen do\'kon boshqaruv tizimining AI yordamchisisisan. O\'zbek tilida javob ber.';
+      systemPrompt = 'Men Shoxrux tomonidan yaratilgan ShoxAi modeliman. Do\'kon boshqaruv tizimining professional AI yordamchisisiman.';
     }
 
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
+    console.log(`[OpenAI] Calling OpenAI API...`);
+    const response = await axios.post("https://api.openai.com/v1/chat/completions", {
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: question }
+      ]
+    }, {
       headers: {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`
       },
-      body: JSON.stringify({
-        model: "gpt-4o-mini",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: question }
-        ]
-      })
+      timeout: 30000
     });
 
-    if (!response.ok) throw new Error(`OpenAI API xatosi: ${response.status}`);
-    const data = await response.json();
-    res.json({ answer: data.choices?.[0]?.message?.content || "❌ Javob olinmadi" });
+    const answer = response.data.choices?.[0]?.message?.content || "❌ Javob olinmadi";
+
+    // AI javobini saqlash
+    await saveChatMessage(safeLogin, 'assistant', answer, historyModelId);
+
+    res.json({ answer });
   } catch (error) {
-    console.error("❌ OpenAI xatosi:", error.message);
-    res.status(500).json({ error: "OpenAI bilan aloqa xatosi" });
+    let errorMsg = "OpenAI bilan aloqa xatosi";
+    if (error.response) {
+      errorMsg = error.response.data?.error?.message || `OpenAI API Error: ${error.response.status}`;
+    } else if (error.request) {
+      errorMsg = "OpenAI serveridan javob olinmadi";
+    } else {
+      errorMsg = error.message;
+    }
+    console.error("❌ OpenAI xatosi:", errorMsg);
+    res.status(500).json({ error: errorMsg });
   }
 });
 
 // 📌 Gemini Pro endpoint
-router.post('/ask-gemini', async (req, res) => {
-  const { question, login, systemOverride } = req.body;
-  if (!question) return res.status(400).json({ error: 'Savol kiritilmagan' });
+// 📌 Gemini Pro/Flash endpoint (v2.5 optimized)
+router.post('/ask-gemini', verifyToken, csrfProtection, async (req, res) => {
+  const { question, login, systemOverride, modelId: feModelId } = req.body;
+  
+  if (!question || !login) {
+    return res.status(400).json({ error: 'Savol va login kiritilmagan' });
+  }
+
+  const safeLogin = String(login).trim().toLowerCase();
+  
+  // 🛡️ Xavfsizlik tekshiruvi
+  if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+    return res.status(403).json({ error: "Ruxsat etilmagan!" });
+  }
 
   try {
+    // 1. Foydalanuvchi xabarini saqlash (Model ID yangilandi)
+    const historyModelId = feModelId || 'gemini-2.5-flash';
+    await saveChatMessage(safeLogin, 'user', question, historyModelId);
+
+    // 2. Kontekstni tayyorlash
     let contextText = systemOverride || '';
     if (!systemOverride && login && needsData(question)) {
+      console.log(`[Gemini] Building data context for ${login}...`);
       contextText = await buildFullContext(login);
     }
 
-    const systemPrompt = `Sen do'kon boshqaruv tizimining AI yordamchisisisan. O'zbek tilida javob ber.\n${contextText}\n\nSavol: `;
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
+    const systemPrompt = `Men Shoxrux tomonidan yaratilgan ShoxAi modelisan. Do'kon boshqaruv tizimining professional AI yordamchisisisan. O'zbek tilida javob ber.\n\n${contextText}`;
 
-    const response = await fetch(url, {
-      method: "POST",
+    console.log(`[Gemini] Calling Gemini 2.5 Flash API...`);
+
+    // 3. Google AI Studio API so'rovi
+    // URL v1beta dan v1 ga yoki gemini-2.5-flash ga yangilandi
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
+
+    const response = await axios.post(url, {
+      contents: [
+        {
+          role: 'user',
+          parts: [{ text: `${systemPrompt}\n\nFoydalanuvchi savoli: ${question}` }]
+        }
+      ],
+      // ✨ Yangi: Javob sifatini nazorat qilish uchun parametrlar
+      generationConfig: {
+        temperature: 0.7,
+        topK: 40,
+        topP: 0.95,
+        maxOutputTokens: 2048,
+      }
+    }, {
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: systemPrompt + question }] }]
-      }),
+      timeout: 30000 // 30 soniya
     });
 
-    const data = await response.json();
-    if (!response.ok) return res.status(response.status).json(data);
-
-    res.json({ answer: data?.candidates?.[0]?.content?.parts?.[0]?.text || "Javob olinmadi" });
-  } catch (error) {
-    if (error.message?.includes("429")) {
-      return res.status(429).json({ error: "Limit tugadi. Iltimos, bir ozdan keyin urinib ko'ring." });
+    // 4. Javobni qabul qilish
+    const answer = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    
+    if (!answer) {
+      throw new Error("Gemini modelidan bo'sh javob qaytdi yoki xavfsizlik filtri blokladi.");
     }
-    res.status(500).json({ error: "Tizimda xatolik yuz berdi." });
+
+    // 5. AI javobini saqlash
+    await saveChatMessage(safeLogin, 'assistant', answer, historyModelId);
+
+    res.json({ answer });
+
+  } catch (error) {
+    let errorMsg = "Gemini tizimida kutilmagan xatolik yuz berdi.";
+    
+    if (error.response) {
+      const status = error.response.status;
+      const remoteError = error.response.data?.error?.message || "";
+      
+      console.error(`❌ Gemini API Error [${status}]:`, remoteError);
+
+      if (status === 429) {
+        errorMsg = "Google API limiti tugadi. Iltimos, bir necha daqiqadan so'ng urinib ko'ring.";
+      } else if (status === 404) {
+        errorMsg = "Model topilmadi (gemini-2.5-flash). Iltimos, model nomini tekshiring.";
+      } else {
+        errorMsg = `Gemini xatosi: ${remoteError || status}`;
+      }
+    } else if (error.request) {
+      console.error("❌ Gemini Network Error: Serverdan javob kelmadi.");
+      errorMsg = "Internet aloqasi yoki Google serverlari bilan bog'liq muammo.";
+    } else {
+      console.error("❌ Controller Error:", error.message);
+      errorMsg = error.message;
+    }
+
+    res.status(500).json({ error: errorMsg });
   }
 });
 
 // 📌 Grok AI endpoint
-router.post('/ask-grok', async (req, res) => {
-  const { question, login, systemOverride } = req.body;
-  if (!question) return res.status(400).json({ error: 'Savol kiritilmagan' });
+router.post('/ask-grok', verifyToken, csrfProtection, async (req, res) => {
+  const { question, login, systemOverride, modelId: feModelId } = req.body;
+  if (!question || !login) return res.status(400).json({ error: 'Savol va login kiritilmagan' });
+
+  // 🛡️ A01: Broken Access Control
+  const safeLogin = String(login).trim().toLowerCase();
+  if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+    return res.status(403).json({ error: "Ruxsat etilmagan!" });
+  }
 
   try {
+    const historyModelId = feModelId || 'grok-ai';
+    // User xabarini saqlash
+    await saveChatMessage(safeLogin, 'user', question, historyModelId);
+
     let systemPrompt = systemOverride || '';
     if (!systemOverride && login && needsData(question)) {
       const context = await buildFullContext(login);
@@ -285,38 +547,59 @@ router.post('/ask-grok', async (req, res) => {
       systemPrompt = 'Sen do\'kon boshqaruv tizimining AI yordamchisisisan. O\'zbek tilida javob ber.';
     }
 
-    const response = await fetch("https://api.x.ai/v1/chat/completions", {
-      method: "POST",
+    console.log(`[Grok] Calling Grok API...`);
+    const response = await axios.post("https://api.x.ai/v1/chat/completions", {
+      model: "grok-4-latest",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: question }
+      ],
+      stream: false,
+      temperature: 0.7
+    }, {
       headers: {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${process.env.XAI_API_KEY}`
       },
-      body: JSON.stringify({
-        model: "grok-4-latest",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: question }
-        ],
-        stream: false,
-        temperature: 0.7
-      })
+      timeout: 30000
     });
 
-    if (!response.ok) throw new Error(`Grok API xatosi: ${response.status}`);
-    const data = await response.json();
-    res.json({ answer: data.choices?.[0]?.message?.content || "❌ Javob olinmadi" });
+    const answer = response.data.choices?.[0]?.message?.content || "❌ Javob olinmadi";
+
+    // AI javobini saqlash
+    await saveChatMessage(safeLogin, 'assistant', answer, historyModelId);
+
+    res.json({ answer });
   } catch (error) {
-    console.error("❌ Grok xatosi:", error.message);
-    res.status(500).json({ error: "Grok bilan aloqa xatosi" });
+    let errorMsg = "Grok bilan aloqa xatosi";
+    if (error.response) {
+      errorMsg = error.response.data?.error?.message || `Grok API Error: ${error.response.status}`;
+    } else if (error.request) {
+      errorMsg = "Grok serveridan javob olinmadi";
+    } else {
+      errorMsg = error.message;
+    }
+    console.error("❌ Grok xatosi:", errorMsg);
+    res.status(500).json({ error: errorMsg });
   }
 });
 
-// 📌 DeepSeek AI endpoint — ASOSIY AI AGENT
-router.post('/ask-deepseek', async (req, res) => {
-  const { question, login, systemOverride } = req.body;
-  if (!question) return res.status(400).json({ error: 'Savol kiritilmagan' });
+// 📌 ShoxAI endpoint 
+router.post('/ask-shoxai', verifyToken, csrfProtection, async (req, res) => {
+  const { question, login, systemOverride, modelId: feModelId } = req.body;
+  if (!question || !login) return res.status(400).json({ error: 'Savol va login kiritilmagan' });
+
+  // 🛡️ A01: Broken Access Control
+  const safeLogin = String(login).trim().toLowerCase();
+  if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+    return res.status(403).json({ error: "Ruxsat etilmagan!" });
+  }
 
   try {
+    const historyModelId = feModelId || 'shox-ai';
+    // User xabarini saqlash
+    await saveChatMessage(safeLogin, 'user', question, historyModelId);
+
     let systemPrompt = '';
 
     // Frontend systemOverride yuborilgan bo'lsa (Ai.tsx sahifasi)
@@ -325,51 +608,162 @@ router.post('/ask-deepseek', async (req, res) => {
     } else if (login) {
       // Avtomatik ma'lumot olish
       const context = await buildFullContext(login);
-      systemPrompt = `Sen professional savdo tahlilchisi va biznes maslahatchisisisan. 
+      systemPrompt = `Men Shoxrux tomonidan yaratilgan ShoxAi modeliman. Professional savdo tahlilchisi va biznes maslahatchisisisan. 
 Sening vazifang do'kon ma'lumotlarini real vaqtda tahlil qilib, amaliy maslahatlar berishdir.
 
 QOIDALAR:
-1. Faqat berilgan ma'lumotlarga asoslan
-2. Raqamlarni aniq ko'rsat
-3. Har doim amaliy tavsiyalar ber
-4. O'zbek tilida javob ber
-5. Markdown formatidan foydalan
+1. Ismingni so'rashsa: "Men Shoxrux tomonidan yaratilgan ShoxAi modeliman" deb javob ber.
+2. Faqat berilgan ma'lumotlarga asoslan
+3. Raqamlarni aniq ko'rsat
+4. Har doim amaliy tavsiyalar ber
+5. O'zbek tilida javob ber
+6. Markdown formatidan foydalan
 
 ${context}`;
     } else {
-      systemPrompt = 'Sen do\'kon boshqaruv tizimining AI yordamchisisisan. O\'zbek tilida javob ber.';
+      systemPrompt = 'Men Shoxrux tomonidan yaratilgan ShoxAi modeliman. Do\'kon boshqaruv tizimining AI yordamchisisisan. O\'zbek tilida javob ber.';
     }
 
-    const response = await fetch("https://api.deepseek.com/v1/chat/completions", {
-      method: "POST",
+    const response = await axios.post("https://api.deepseek.com/v1/chat/completions", {
+      model: "deepseek-chat",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: question }
+      ]
+    }, {
       headers: {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${process.env.DEEPSEEK_API_KEY}`
       },
-      body: JSON.stringify({
-        model: "deepseek-chat",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: question }
-        ],
-        stream: false,
-        temperature: 0.7,
-        max_tokens: 2048
-      })
+      timeout: 30000
     });
 
-    if (!response.ok) {
-      const errData = await response.json().catch(() => ({}));
-      throw new Error(`DeepSeek API xatosi: ${response.status} — ${JSON.stringify(errData)}`);
-    }
+    const answer = response.data.choices?.[0]?.message?.content || "❌ Javob olinmadi";
 
-    const data = await response.json();
-    const answer = data.choices?.[0]?.message?.content || "❌ Javob olinmadi";
+    // AI javobini saqlash
+    await saveChatMessage(safeLogin, 'assistant', answer, historyModelId);
+
     res.json({ answer });
   } catch (error) {
-    console.error("❌ DeepSeek xatosi:", error.message);
-    res.status(500).json({ error: "DeepSeek bilan aloqa xatosi: " + error.message });
+    let errorMsg = "ShoxAi (DeepSeek) bilan aloqa xatosi";
+    if (error.response) {
+      errorMsg = error.response.data?.error?.message || `ShoxAi API Error: ${error.response.status}`;
+    } else if (error.request) {
+      errorMsg = "ShoxAi serveridan javob olinmadi";
+    } else {
+      errorMsg = error.message;
+    }
+    console.error("❌ ShoxAi xatosi:", errorMsg);
+    res.status(500).json({ error: errorMsg });
   }
 });
 
-module.exports = router;
+// 📌 OpenRouter AI endpoint
+router.post('/ask-openrouter', verifyToken, csrfProtection, async (req, res) => {
+  const { question, login, orModel, systemOverride, modelId: feModelId } = req.body;
+  if (!question || !login) return res.status(400).json({ error: 'Savol va login kiritilmagan' });
+
+  const safeLogin = String(login).trim().toLowerCase();
+  if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+    return res.status(403).json({ error: "Ruxsat etilmagan!" });
+  }
+
+  try {
+    const orModelId = orModel || 'deepseek/deepseek-chat';
+    const historyModelId = feModelId || orModelId;
+    await saveChatMessage(safeLogin, 'user', question, historyModelId);
+
+    let systemPrompt = systemOverride || 'Sen professional AI yordamchisan. O\'zbek tilida javob ber.';
+    if (!systemOverride && login && needsData(question)) {
+      const context = await buildFullContext(login);
+      systemPrompt += `\n\n${context}`;
+    }
+
+    console.log(`[OpenRouter] Calling API with model: ${orModelId}`);
+    const response = await axios.post("https://openrouter.ai/api/v1/chat/completions", {
+      model: orModelId,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: question }
+      ],
+    }, {
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
+        "HTTP-Referer": "https://shoxpospro.uz",
+        "X-Title": "ShoxPosPro"
+      },
+      timeout: 45000
+    });
+
+    const answer = response.data.choices?.[0]?.message?.content || "❌ Javob olinmadi";
+
+    await saveChatMessage(safeLogin, 'assistant', answer, historyModelId);
+    res.json({ answer });
+  } catch (error) {
+    let errorMsg = "OpenRouter bilan aloqa xatosi";
+    if (error.response) {
+      errorMsg = error.response.data?.error?.message || `OpenRouter API Error: ${error.response.status}`;
+      console.error(`❌ OpenRouter API xatosi (${error.response.status}):`, JSON.stringify(error.response.data));
+    } else {
+      errorMsg = error.message;
+      console.error(`❌ OpenRouter xatosi:`, error.message);
+    }
+    res.status(500).json({ error: errorMsg });
+  }
+});
+
+// 📌 Together.ai endpoint
+router.post('/ask-together', verifyToken, csrfProtection, async (req, res) => {
+  const { question, login, togetherModel, systemOverride, modelId: feModelId } = req.body;
+  if (!question || !login) return res.status(400).json({ error: 'Savol va login kiritilmagan' });
+
+  const safeLogin = String(login).trim().toLowerCase();
+  if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+    return res.status(403).json({ error: "Ruxsat etilmagan!" });
+  }
+
+  try {
+    const tgModelId = togetherModel || 'meta-llama/Llama-3.3-70B-Instruct-Turbo';
+    const historyModelId = feModelId || tgModelId;
+    await saveChatMessage(safeLogin, 'user', question, historyModelId);
+
+    let systemPrompt = systemOverride || 'Sen professional AI yordamchisan. O\'zbek tilida javob ber.';
+    if (!systemOverride && login && needsData(question)) {
+      const context = await buildFullContext(login);
+      systemPrompt += `\n\n${context}`;
+    }
+
+    console.log(`[Together] Calling API with model: ${tgModelId}`);
+    const response = await axios.post("https://api.together.xyz/v1/chat/completions", {
+      model: tgModelId,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: question }
+      ],
+      max_tokens: 2048,
+      temperature: 0.7,
+      top_p: 0.7,
+      top_k: 50,
+      repetition_penalty: 1,
+      stop: ["<|eot_id|>", "<|file_separator|>"]
+    }, {
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${process.env.TOGETHER_API_KEY}`
+      },
+      timeout: 40000
+    });
+
+    const answer = response.data.choices?.[0]?.message?.content || "❌ Javob olinmadi";
+    await saveChatMessage(safeLogin, 'assistant', answer, historyModelId);
+
+    res.json({ answer });
+  } catch (error) {
+    console.error("❌ Together.ai xatosi:", error.response?.data || error.message);
+    res.status(500).json({ error: error.response?.data?.error?.message || "Together.ai aloqa xatosi" });
+  }
+});
+
+  return router;
+};

@@ -7,10 +7,7 @@ const DB_NAME = MONGO_URI.split('/').pop().split('?')[0]; // posdb yoki shoxpos
 
 const connectDB = async () => {
   try {
-    const conn = await mongoose.connect(MONGO_URI, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true
-    });
+    const conn = await mongoose.connect(MONGO_URI);
 
     const dbName = conn.connection?.db?.databaseName || DB_NAME;
     console.log(`✅ MongoDB '${dbName}' bazasiga ulanish muvaffaqiyatli`);

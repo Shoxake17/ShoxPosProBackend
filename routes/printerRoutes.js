@@ -1,10 +1,11 @@
 const express = require('express');
-const router = express.Router();
 const USBAdapter = require('@node-escpos/usb-adapter');
+const verifyToken = require('../middleware/verifyToken');
 
 module.exports = (io) => {
+  const router = express.Router();
 
-  router.get('/check-printer', (req, res) => {
+  router.get('/check-printer', verifyToken, (req, res) => {
     // ✅ FIX: responded flag — ikki marta res.json() chaqirilishini oldini oladi
     let responded = false;
 

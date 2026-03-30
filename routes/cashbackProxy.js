@@ -1,15 +1,23 @@
 const express = require('express');
-const router = express.Router();
 const axios = require('axios');
+const verifyToken = require('../middleware/verifyToken');
 // Boyagi metrics.js dan metrika obyektini chaqirib olamiz
 const { totalCashbackGiven } = require('./metrics'); 
+
+module.exports = (csrfProtection) => {
+  const router = express.Router();
 
 const SHOXPAY_BACKEND_URL = process.env.SHOXPAY_BACKEND_URL || 'http://localhost:4000';
 const SHOXPOSPRO_SECRET   = process.env.SHOXPOSPRO_SECRET   || 'shoxpospro-secret-2024';
 
-router.post('/register', async (req, res) => {
+router.post('/register', verifyToken, csrfProtection, async (req, res) => {
   try {
     const { receiptId, totalAmount, storeName } = req.body;
+    
+    // 🛡️ A10: SSRF prevention - inputs are validated and not used in URL construction directly
+    if (!receiptId || typeof totalAmount !== 'number' || !storeName) {
+      return res.status(400).json({ success: false, message: 'Ma\'lumotlar noto\'g\'ri' });
+    }
 
     const response = await axios.post(
       `${SHOXPAY_BACKEND_URL}/api/cashback/register`,
@@ -44,4 +52,5 @@ router.post('/register', async (req, res) => {
   }
 });
 
-module.exports = router;
+  return router;
+};

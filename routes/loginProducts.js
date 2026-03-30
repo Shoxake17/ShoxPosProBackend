@@ -1,6 +1,10 @@
 const express = require("express");
-const router = express.Router();
 const mongoose = require("mongoose");
+const verifyToken = require('../middleware/verifyToken');
+const AuditService = require('../services/auditService');
+
+module.exports = (csrfProtection) => {
+  const router = express.Router();
 
 // ====================================================================
 // 🛡️ SANITIZERS
@@ -61,10 +65,15 @@ function getProductModel(safeLogin) {
 // ====================================================================
 // GET /products/:login
 // ====================================================================
-router.get("/products/:login", async (req, res) => {
+router.get("/products/:login", verifyToken, async (req, res) => {
   let safeLogin;
   try {
     safeLogin = sanitizeLogin(req.params.login);
+    
+    // 🛡️ A01: Broken Access Control
+    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      return res.status(403).json({ message: "Ruxsat etilmagan!" });
+    }
   } catch (e) {
     return res.status(400).json({ message: e.message });
   }
@@ -82,10 +91,15 @@ router.get("/products/:login", async (req, res) => {
 // ====================================================================
 // POST /sync-products/:login
 // ====================================================================
-router.post("/sync-products/:login", async (req, res) => {
+router.post("/sync-products/:login", verifyToken, csrfProtection, async (req, res) => {
   let safeLogin;
   try {
     safeLogin = sanitizeLogin(req.params.login);
+    
+    // 🛡️ A01: Broken Access Control
+    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      return res.status(403).json({ message: "Ruxsat etilmagan!" });
+    }
   } catch (e) {
     return res.status(400).json({ message: e.message });
   }
@@ -97,6 +111,14 @@ router.post("/sync-products/:login", async (req, res) => {
 
   try {
     const Product = getProductModel(safeLogin);
+    
+    // Sync logic (replace/upsert) - log it
+    await AuditService.logUserAction({
+      login: req.user.login,
+      action: 'SYNC_PRODUCTS',
+      status: 'SUCCESS',
+      details: { count: products.length }
+    });
 
     for (const p of products) {
       let safeBarcode, safeName, safePrice, safeBasePrice, safeQty, safeCategory;
@@ -137,10 +159,16 @@ router.post("/sync-products/:login", async (req, res) => {
 // ====================================================================
 // POST /update-price/:login
 // ====================================================================
-router.post("/update-price/:login", async (req, res) => {
+router.post("/update-price/:login", verifyToken, csrfProtection, async (req, res) => {
   let safeLogin, safeBarcode, safePrice;
   try {
     safeLogin   = sanitizeLogin(req.params.login);
+
+    // 🛡️ A01: Broken Access Control
+    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      return res.status(403).json({ message: "Ruxsat etilmagan!" });
+    }
+
     safeBarcode = sanitizeBarcode(req.body.barcode);
     safePrice   = sanitizeNumber(req.body.newPrice, 'newPrice');
   } catch (e) {
@@ -163,10 +191,16 @@ router.post("/update-price/:login", async (req, res) => {
 // ====================================================================
 // POST /update-base-price/:login
 // ====================================================================
-router.post("/update-base-price/:login", async (req, res) => {
+router.post("/update-base-price/:login", verifyToken, csrfProtection, async (req, res) => {
   let safeLogin, safeBarcode, safeBasePrice;
   try {
     safeLogin     = sanitizeLogin(req.params.login);
+
+    // 🛡️ A01: Broken Access Control
+    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      return res.status(403).json({ message: "Ruxsat etilmagan!" });
+    }
+
     safeBarcode   = sanitizeBarcode(req.body.barcode);
     safeBasePrice = sanitizeNumber(req.body.newBasePrice, 'newBasePrice');
   } catch (e) {
@@ -196,10 +230,16 @@ router.post("/update-base-price/:login", async (req, res) => {
 // ====================================================================
 // POST /delete-product/:login
 // ====================================================================
-router.post("/delete-product/:login", async (req, res) => {
+router.post("/delete-product/:login", verifyToken, csrfProtection, async (req, res) => {
   let safeLogin, safeBarcode;
   try {
     safeLogin   = sanitizeLogin(req.params.login);
+
+    // 🛡️ A01: Broken Access Control
+    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      return res.status(403).json({ message: "Ruxsat etilmagan!" });
+    }
+
     safeBarcode = sanitizeBarcode(req.body.barcode);
   } catch (e) {
     return res.status(400).json({ message: e.message });
@@ -222,10 +262,16 @@ router.post("/delete-product/:login", async (req, res) => {
 // ====================================================================
 // POST /update-or-add-user-product
 // ====================================================================
-router.post("/update-or-add-user-product", async (req, res) => {
+router.post("/update-or-add-user-product", verifyToken, csrfProtection, async (req, res) => {
   let safeLogin, safeBarcode, safeName, safePrice, safeBasePrice, safeQty, safeCategory;
   try {
     safeLogin     = sanitizeLogin(req.body.login);
+
+    // 🛡️ A01: Broken Access Control
+    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      return res.status(403).json({ message: "Ruxsat etilmagan!" });
+    }
+
     safeBarcode   = sanitizeBarcode(req.body.barcode);
     safeName      = sanitizeName(req.body.name);
     safePrice     = sanitizeNumber(req.body.price     ?? 0, 'price');
@@ -267,13 +313,19 @@ router.post("/update-or-add-user-product", async (req, res) => {
 // ====================================================================
 // POST /ai-query/:login
 // ====================================================================
-router.post("/ai-query/:login", async (req, res) => {
+router.post("/ai-query/:login", verifyToken, csrfProtection, async (req, res) => {
   let safeLogin;
   try {
     safeLogin = sanitizeLogin(req.params.login);
+
+    // 🛡️ A01: Broken Access Control
+    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      return res.status(403).json({ message: "Ruxsat etilmagan!" });
+    }
   } catch (e) {
     return res.status(400).json({ message: e.message });
   }
+
 
   const query = req.body.query;
   if (!query || typeof query !== 'string') {
@@ -303,4 +355,5 @@ router.post("/ai-query/:login", async (req, res) => {
   }
 });
 
-module.exports = router;
+  return router;
+};
