@@ -80,6 +80,7 @@ app.use(helmet({
         'https://api.anthropic.com',
         'https://generativelanguage.googleapis.com',
         'https://api.x.ai',
+        'https://cbu.uz',
       ],
       fontSrc:    ["'self'", 'data:'],
       objectSrc:  ["'none'"],
