@@ -5,7 +5,7 @@ const verifyToken = require('../middleware/verifyToken');
 module.exports = (csrfProtection) => {
   const router = express.Router();
 
-// Dinamik Qarzlar modeli
+// Dinamik Qarzlar modelis
 function getDebtsModel(login) {
   // 🛡️ A03: Input validation
   if (!/^[a-zA-Z0-9_-]+$/.test(login)) {
