@@ -70,19 +70,39 @@ module.exports = (csrfProtection, io) => {
       // ✅ Agar foydalanuvchi admin bo'lmasa:
       // 1. O'zini ko'rishi kerak
       // 2. Barcha Adminlarni ko'rishi kerak (Support uchun)
-      // 3. isSecret: false bo'lgan boshqa foydalanuvchilarni ko'rishi kerak
+      // 3. Faqat avval gaplashgan foydalanuvchilarni ko'rishi kerak (Chat ID orqali topilgandan so'ng)
       if (currentUserRole !== 'admin') {
+        // Avval gaplashgan foydalanuvchilar ro'yxatini topish
+        const chatRooms = await UserChatHistory.find({ roomId: { $regex: currentUserLogin } }).distinct('roomId');
+        const chattedLogins = chatRooms.map(room => {
+          const parts = room.split('_');
+          return parts[0] === currentUserLogin ? parts[1] : parts[0];
+        });
+
         query.$or = [
           { login: currentUserLogin },
           { role: 'admin' },
-          { isSecret: false }
+          { login: { $in: chattedLogins } }
         ];
       }
 
-      const users = await User.find(query, 'login name role isSecret').lean();
+      const users = await User.find(query, 'login name firstName lastName avatarUrl uniqueChatId role isSecret').lean();
       
-      // Har bir foydalanuvchi uchun oxirgi xabarni topish
+      // Har bir foydalanuvchi uchun oxirgi xabarni topish va ID yo'q bo'lsa generatsiya qilish
       const usersWithLastMsg = await Promise.all(users.map(async (u) => {
+        // Agar ID yo'q bo'lsa (eski foydalanuvchi), uni bazada yangilab qo'yamiz
+        if (!u.uniqueChatId) {
+          let isUnique = false;
+          let newId = '';
+          while (!isUnique) {
+            newId = Math.floor(1000000000 + Math.random() * 9000000000).toString();
+            const existing = await User.findOne({ uniqueChatId: newId });
+            if (!existing) isUnique = true;
+          }
+          await User.updateOne({ login: u.login }, { uniqueChatId: newId });
+          u.uniqueChatId = newId;
+        }
+
         const roomId = getRoomId(req.user.login, u.login);
         const lastBucket = await UserChatHistory.findOne({ roomId }).sort({ bucketId: -1 });
         
@@ -101,6 +121,7 @@ module.exports = (csrfProtection, io) => {
 
       res.json(usersWithLastMsg);
     } catch (err) {
+      console.error('Users error:', err);
       res.status(500).json({ error: 'Foydalanuvchilarni olishda xato' });
     }
   });

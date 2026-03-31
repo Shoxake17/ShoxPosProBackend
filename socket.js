@@ -28,34 +28,37 @@ function initIO(socketIO) {
   io.on('connection', (socket) => {
     console.log(`Socket ulandi: ${socket.id}`);
 
+    // ✅ 1. Ulanishda auth orqali royxatga olish
     const authLogin = socket.handshake.auth?.login;
     const authDeviceId = socket.handshake.auth?.deviceId;
 
     if (authLogin) {
       _registerSocket(socket.id, authLogin, authDeviceId || null);
-      console.log(`${authLogin} handshake orqali royxatga olindi`);
+      console.log(`[Socket] ${authLogin} handshake orqali ulandi. Socket: ${socket.id}`);
       io.emit('userStatusChange', { login: authLogin, status: 'online' });
     }
 
+    // ✅ 2. Qo'lda ro'yxatdan o'tish (Login'dan keyin yoki handshake o'xshamasa)
     socket.on('registerUser', ({ login, deviceId }) => {
       if (!login) return;
 
-      // ✅ deviceId yo'q bo'lsa handshake dan ol
       const resolvedDeviceId = deviceId || socket.handshake.auth?.deviceId || null;
 
+      // Eskirgan socketlarni tozalash (agar login va deviceId bir xil bo'lsa)
       if (userSockets[login]) {
         userSockets[login] = userSockets[login].filter(
-          s => s.deviceId !== resolvedDeviceId
+          s => s.deviceId !== resolvedDeviceId || s.socketId === socket.id
         );
       }
 
       _registerSocket(socket.id, login, resolvedDeviceId);
-      console.log(`${login} | deviceId: ${resolvedDeviceId} | socket: ${socket.id}`);
+      console.log(`[Socket] ${login} qo'lda ro'yxatga olindi. Socket: ${socket.id}`);
       io.emit('userStatusChange', { login, status: 'online' });
     });
 
+    // ✅ 3. Onlayn foydalanuvchilar ro'yxatini olish
     socket.on('getOnlineUsers', () => {
-      const onlineLogins = Object.keys(userSockets);
+      const onlineLogins = Object.keys(userSockets).filter(login => userSockets[login].length > 0);
       socket.emit('onlineUsersList', onlineLogins);
     });
 

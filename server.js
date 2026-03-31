@@ -23,11 +23,10 @@ connectDB();
 const app = express();
 const server = http.createServer(app);
 
-// ✅ Proxy orqasidagiligini bildirish (secure cookie va IP uchun)
 app.set('trust proxy', 1);
 
 // ====================================
-// 🔒 CORS SOZLAMALARI
+// 🔒 CORS
 // ====================================
 const allowedOrigins = [
   'https://shoxpospro.uz',
@@ -47,13 +46,11 @@ app.use(cors({
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
-      // ✅ Origin logga chiqarilmaydi — log injection oldini olish
       callback(new Error('CORS policy violation'));
     }
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  // ✅ Faqat 'CSRF-Token' — 'X-CSRF-Token' o'chirildi (server bilan bir xil)
   allowedHeaders: ['Content-Type', 'Authorization', 'CSRF-Token', 'X-CSRF-Token', 'X-Requested-With'],
   exposedHeaders: ['CSRF-Token', 'X-CSRF-Token'],
 }));
@@ -68,7 +65,7 @@ app.use(helmet({
       baseUri:    ["'self'"],
       scriptSrc:  ["'self'", 'https://cdn.jsdelivr.net'],
       styleSrc:   ["'self'", "'unsafe-inline'"],
-      imgSrc:     ["'self'", "data:", "https:", "blob:"],
+      imgSrc:     ["'self'", "data:", "https:", "blob:", "res.cloudinary.com"],
       connectSrc: [
         "'self'",
         'ws:',
@@ -100,7 +97,6 @@ app.use(helmet({
 
 // ====================================
 // 🔌 SOCKET.IO
-// ✅ allowEIO3: false — eski EIO3 protokoli o'chirildi (xavfsizlik)
 // ====================================
 const io = socketIo(server, {
   path: '/socket.io/',
@@ -110,7 +106,7 @@ const io = socketIo(server, {
     credentials: true,
   },
   transports:   ['websocket', 'polling'],
-  allowEIO3:    false,   // ✅ false — EIO3 o'chirildi
+  allowEIO3:    false,
   pingTimeout:  60000,
   pingInterval: 25000,
 });
@@ -126,59 +122,54 @@ app.use('/temp', express.static(path.join(__dirname, 'temp')));
 app.use(cookieParser());
 
 // ====================================
-// 🔒 CSRF HIMOYA
+// 🔒 CSRF
 // ====================================
 const csrfProtection = csrf({
   cookie: {
     key:      '_csrf',
     httpOnly: true,
-    secure:   config.NODE_ENV === 'production', 
-    sameSite: 'lax', 
+    secure:   config.NODE_ENV === 'production',
+    sameSite: 'lax',
     path:     '/',
   },
   value: (req) => {
-    return req.headers['csrf-token'] || 
-           req.headers['x-csrf-token'] || 
-           req.headers['xsrf-token'] || 
-           req.headers['x-xsrf-token'] || 
+    return req.headers['csrf-token'] ||
+           req.headers['x-csrf-token'] ||
+           req.headers['xsrf-token'] ||
+           req.headers['x-xsrf-token'] ||
            (req.body && req.body._csrf) ||
            req.query?._csrf;
   }
 });
 
 // ====================================
-// 🛡️ RATE LIMITLAR
+// 🛡️ RATE LIMIT
 // ====================================
 const apiLimiter = require('./middleware/apiRateLimit');
 
-// ✅ CSRF token uchun alohida rate limit — brute-force oldini olish
 const csrfLimiter = rateLimit({
-  windowMs: 10 * 60 * 1000, // 10 daqiqa
-  max: 100,                  // 10 daqiqada 100 ta so'rov (recovery loop uchun yetarli)
+  windowMs: 10 * 60 * 1000,
+  max: 100,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { message: 'Juda ko\'p so\'rov. Keyinroq urinib ko\'ring.' },
-  // ✅ stack trace chiqarilmaydi
   handler: (req, res) => {
     res.status(429).json({ message: 'Juda ko\'p so\'rov. Keyinroq urinib ko\'ring.' });
   },
 });
 
-// ✅ Global API rate limit
+// Global rate limit
 app.use('/api', apiLimiter);
-// ✅ /metrics ham himoyalangan
 app.use('/metrics', apiLimiter);
 
 // ====================================
 // 🔑 CSRF TOKEN ENDPOINT
-// ✅ csrfLimiter qo'shildi
 // ====================================
 app.get('/api/csrf-token', csrfLimiter, csrfProtection, (req, res) => {
   res.json({ csrfToken: req.csrfToken() });
 });
 
 // ====================================
-// 📝 LOGGING — production'da minimal
+// 📝 LOGGING
 // ====================================
 app.use((req, res, next) => {
   if (config.NODE_ENV === 'development') {
@@ -187,7 +178,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// ✅ CSRF Xatolarini tutish uchun maxsus middleware
+// CSRF xato handler
 app.use((err, req, res, next) => {
   if (err.code === 'EBADCSRFTOKEN') {
     return res.status(403).json({
@@ -213,11 +204,14 @@ const printerRoutes       = require('./routes/printerRoutes')(io);
 const authenticatorRouter = require('./routes/authenticatorRoutes')(csrfProtection);
 const cashbackProxy       = require('./routes/cashbackProxy')(csrfProtection);
 const adminRoutes         = require('./routes/adminRoutes')(csrfProtection);
+const userRoutes          = require('./routes/userRoutes')(io);
 const userChatRoutes      = require('./routes/userChatRoutes')(csrfProtection, io);
 const { router: metricsRouter } = require('./routes/metrics');
 
+// ✅ MUHIM: /api/users ALBATTA authRouter dan OLDIN bo'lishi kerak!
 app.use('/metrics',          metricsRouter);
-app.use('/api',              authRouter);
+app.use('/api/users',        verifyToken, userRoutes);  // ✅ OLDIN
+app.use('/api',              authRouter);               // KEYIN
 app.use('/api',              biometricRouter);
 app.use('/api/google-auth',  authenticatorRouter);
 app.use('/api',              aiRoutes);
@@ -252,17 +246,13 @@ app.get(/^(?!\/api).+/, (req, res, next) => {
 // ====================================
 // ❌ ERROR HANDLERS
 // ====================================
-// 404
 app.use((req, res) => {
   if (!res.headersSent) {
-    // ✅ path qaytarilmaydi — path disclosure oldini olish
     res.status(404).json({ message: 'API endpoint topilmadi' });
   }
 });
 
-// Global xato handler
 app.use((err, req, res, next) => {
-  // ✅ production'da stack trace logga chiqarilmaydi
   if (config.NODE_ENV === 'development') {
     console.error('❌ Server xatosi:', err.stack);
   } else {
@@ -278,7 +268,6 @@ app.use((err, req, res, next) => {
   if (!res.headersSent) {
     res.status(500).json({
       message: 'Server xatosi',
-      // ✅ production'da error detail chiqarilmaydi
       error: config.NODE_ENV === 'development' ? err.message : undefined,
     });
   }

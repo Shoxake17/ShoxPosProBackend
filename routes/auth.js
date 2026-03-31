@@ -31,8 +31,6 @@ module.exports = (csrfProtection) => {
    */
   router.post('/login', loginLimiter, (req, res, next) => {
     if (process.env.NODE_ENV !== 'production') {
-      console.log('🔍 [Login Request] Body:', JSON.stringify(req.body, null, 2));
-      console.log('🔍 [Login Request] Headers:', req.headers['content-type']);
     }
     next();
   }, loginValidation, handleValidationErrors, async (req, res) => {
@@ -453,7 +451,7 @@ module.exports = (csrfProtection) => {
         });
       }
 
-      const allowedFields = ['name', 'email', 'phone'];
+      const allowedFields = ['name', 'email', 'phone', 'firstName', 'lastName', 'phoneNumber', 'avatarUrl'];
       const updates = {};
       allowedFields.forEach(field => {
         if (req.body[field] !== undefined) updates[field] = req.body[field];
@@ -472,6 +470,10 @@ module.exports = (csrfProtection) => {
         user: {
           login: user.login,
           name: user.name,
+          firstName: user.firstName, 
+          lastName: user.lastName,     
+          phoneNumber: user.phoneNumber, 
+          avatarUrl: user.avatarUrl,   
           email: user.email,
           phone: user.phone,
           role: user.role

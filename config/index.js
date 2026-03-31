@@ -14,6 +14,9 @@ const env = cleanEnv(process.env, {
   SOCKET_IO_ENABLED: bool({ default: false }),
   SOCKET_IO_PORT:    num({ default: 3000 }),
   NODE_ENV:          str({ choices: ['development', 'production', 'test'], default: 'development' }),
+  CLOUDINARY_CLOUD_NAME: str(),
+  CLOUDINARY_API_KEY:    str(),
+  CLOUDINARY_API_SECRET: str(),
 });
 
 module.exports = env;

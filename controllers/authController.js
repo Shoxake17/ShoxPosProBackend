@@ -115,7 +115,6 @@ exports.login = async (req, res) => {
   } catch (err) {
     if (isDev) {
       console.warn("⚠️ [Login Validation Error]:", err.message);
-      console.warn("   Request Body:", JSON.stringify(req.body, null, 2));
     }
     return res.status(400).json({ message: err.message });
   }

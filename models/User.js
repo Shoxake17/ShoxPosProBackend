@@ -94,10 +94,34 @@ const userSchema = new mongoose.Schema({
   isSecret: { 
     type: Boolean, 
     default: false 
+  },
+  firstName: { type: String, trim: true },
+  lastName: { type: String, trim: true },
+  phoneNumber: { type: String, trim: true },
+  avatarUrl: { type: String, default: null },
+  uniqueChatId: { 
+    type: String, 
+    unique: true, 
+    sparse: true 
   }
-
 }, { 
   timestamps: true 
+});
+
+// ✅ 10 xonali unikal ID yaratish
+userSchema.pre('save', async function(next) {
+  if (!this.uniqueChatId) {
+    let isUnique = false;
+    while (!isUnique) {
+      const newId = Math.floor(1000000000 + Math.random() * 9000000000).toString();
+      const existing = await mongoose.models.User.findOne({ uniqueChatId: newId });
+      if (!existing) {
+        this.uniqueChatId = newId;
+        isUnique = true;
+      }
+    }
+  }
+  next();
 });
 
 // Parolni hashlash
