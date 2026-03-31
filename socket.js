@@ -1,4 +1,6 @@
 // socket.js
+const { sendPushToUser } = require('./utils/webPush');
+const User = require('./models/User');
 
 let io;
 let activeUsers = [];
@@ -38,13 +40,12 @@ function initIO(socketIO) {
       io.emit('userStatusChange', { login: authLogin, status: 'online' });
     }
 
-    // ✅ 2. Qo'lda ro'yxatdan o'tish (Login'dan keyin yoki handshake o'xshamasa)
+    // ✅ 2. Qo'lda ro'yxatdan o'tish
     socket.on('registerUser', ({ login, deviceId }) => {
       if (!login) return;
 
       const resolvedDeviceId = deviceId || socket.handshake.auth?.deviceId || null;
 
-      // Eskirgan socketlarni tozalash (agar login va deviceId bir xil bo'lsa)
       if (userSockets[login]) {
         userSockets[login] = userSockets[login].filter(
           s => s.deviceId !== resolvedDeviceId || s.socketId === socket.id
@@ -83,12 +84,12 @@ function initIO(socketIO) {
 
     socket.on('disconnect', () => {
       console.log(`Socket uzildi: ${socket.id}`);
-      const disconnectedLogin = Object.keys(userSockets).find(login => 
+      const disconnectedLogin = Object.keys(userSockets).find(login =>
         userSockets[login].some(s => s.socketId === socket.id)
       );
-      
+
       _removeSocket(socket.id);
-      
+
       if (disconnectedLogin && !userSockets[disconnectedLogin]) {
         io.emit('userStatusChange', { login: disconnectedLogin, status: 'offline' });
       }
@@ -102,29 +103,31 @@ function initIO(socketIO) {
       io.emit('userDisconnected', { socketId: socket.id, activeUsers });
     });
 
-    // 💬 Foydalanuvchilar orasidagi chat xabarlari
+    // 💬 Private Message
     socket.on('privateMessage', async ({ receiver, content }) => {
       const sender = socket.handshake.auth?.login;
       if (!sender || !receiver || !content) return;
 
       console.log(`💬 Xabar: ${sender} -> ${receiver}`);
 
-      // 1. Xabarni MongoDB ga saqlash (Backend route'dan save funksiyasini chaqiramiz)
-      // ES6 import bo'lmagani uchun require orqali chaqirish yoki shunchaki saqlash
-      // Shunchaki saqlashni shu yerda ham qilish mumkin lekin userChatRoutes da bor
+      // 1. MongoDB ga saqlash
       try {
         const UserChatHistory = require('./models/UserChatHistory');
         const { encryptAndCompress } = require('./utils/chatCrypto');
         const roomId = [sender, receiver].sort().join('_');
-        
+
         let bucket = await UserChatHistory.findOne({ roomId, isFull: false }).sort({ bucketId: -1 });
         let messages = [];
         if (bucket) {
           const { decryptAndDecompress } = require('./utils/chatCrypto');
-          try { messages = JSON.parse(decryptAndDecompress(bucket.encryptedMessages)); } catch(e) {}
+          try { messages = JSON.parse(decryptAndDecompress(bucket.encryptedMessages)); } catch (e) {}
         } else {
           const lastBucket = await UserChatHistory.findOne({ roomId }).sort({ bucketId: -1 });
-          bucket = new UserChatHistory({ roomId, bucketId: lastBucket ? lastBucket.bucketId + 1 : 0, encryptedMessages: '' });
+          bucket = new UserChatHistory({
+            roomId,
+            bucketId: lastBucket ? lastBucket.bucketId + 1 : 0,
+            encryptedMessages: ''
+          });
         }
         messages.push({ sender, content, timestamp: new Date() });
         bucket.encryptedMessages = encryptAndCompress(JSON.stringify(messages));
@@ -135,19 +138,50 @@ function initIO(socketIO) {
         console.error('Socket chat saqlashda xato:', err.message);
       }
 
-      // 2. Qabul qiluvchiga yuborish
+      // 2. Qabul qiluvchiga socket yuborish
       const receiverSockets = userSockets[receiver] || [];
       receiverSockets.forEach(s => {
         io.to(s.socketId).emit('privateMessage', { sender, content, timestamp: new Date() });
       });
 
-      // 3. Yuboruvchiga tasdiqlash (o'zining boshqa qurilmalari uchun ham)
+      // 3. Yuboruvchining boshqa qurilmalariga
       const senderSockets = userSockets[sender] || [];
       senderSockets.forEach(s => {
         if (s.socketId !== socket.id) {
           io.to(s.socketId).emit('privateMessage', { sender, content, timestamp: new Date() });
         }
       });
+
+      // ✅ 4. Receiver offline bo'lsa Push Notification yuborish
+      const isReceiverOnline = receiverSockets.length > 0;
+      if (!isReceiverOnline) {
+        try {
+          const receiverUser = await User.findOne({ login: receiver }).select('pushSubscription firstName name login');
+          if (receiverUser?.pushSubscription) {
+            const senderUser = await User.findOne({ login: sender }).select('firstName name login');
+            const senderName = senderUser?.firstName || senderUser?.name || sender;
+
+            const result = await sendPushToUser(receiverUser.pushSubscription, {
+              title: `📩 ${senderName} dan yangi xabar`,
+              body: content.length > 80 ? content.substring(0, 80) + '...' : content,
+              icon: '/shoxpospro.png',
+              badge: '/shoxpospro.png',
+              url: '/chat',
+            });
+
+            // Subscription eskirgan bo'lsa o'chirish
+            if (result === 'expired') {
+              await User.findOneAndUpdate(
+                { login: receiver },
+                { pushSubscription: null }
+              );
+              console.log(`[Push] ${receiver} subscription eskirgan, o'chirildi`);
+            }
+          }
+        } catch (err) {
+          console.error('Push notification xatosi:', err.message);
+        }
+      }
     });
 
     // ✏️ Xabarni tahrirlash
@@ -162,13 +196,13 @@ function initIO(socketIO) {
         const { encryptAndCompress, decryptAndDecompress } = require('./utils/chatCrypto');
         const roomId = [sender, receiver].sort().join('_');
         const searchDate = new Date(timestamp);
-        
+
         const buckets = await UserChatHistory.find({ roomId }).sort({ bucketId: -1 });
         let found = false;
         for (const bucket of buckets) {
           let messages = JSON.parse(decryptAndDecompress(bucket.encryptedMessages));
-          const msgIdx = messages.findIndex(m => 
-            m.sender === sender && 
+          const msgIdx = messages.findIndex(m =>
+            m.sender === sender &&
             new Date(m.timestamp).getTime() === searchDate.getTime()
           );
 
@@ -184,12 +218,10 @@ function initIO(socketIO) {
         }
 
         if (found) {
-          // Qabul qiluvchiga yuborish
           const receiverSockets = userSockets[receiver] || [];
           receiverSockets.forEach(s => {
             io.to(s.socketId).emit('messageEdited', { sender, receiver, timestamp, newContent });
           });
-          // Yuboruvchining boshqa qurilmalariga
           const senderSockets = userSockets[sender] || [];
           senderSockets.forEach(s => {
             if (s.socketId !== socket.id) {

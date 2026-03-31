@@ -206,7 +206,9 @@ const cashbackProxy       = require('./routes/cashbackProxy')(csrfProtection);
 const adminRoutes         = require('./routes/adminRoutes')(csrfProtection);
 const userRoutes          = require('./routes/userRoutes')(io);
 const userChatRoutes      = require('./routes/userChatRoutes')(csrfProtection, io);
+const pushRoutes = require('./routes/pushRoutes');
 const { router: metricsRouter } = require('./routes/metrics');
+
 
 // ✅ MUHIM: /api/users ALBATTA authRouter dan OLDIN bo'lishi kerak!
 app.use('/metrics',          metricsRouter);
@@ -222,6 +224,7 @@ app.use('/api/products',     productRoutes);
 app.use('/api',              scanProductsRouter);
 app.use('/api',              debtsRoutes);
 app.use('/api',              salesRoutes);
+app.use('/api/push', verifyToken, pushRoutes);
 app.use('/api/admin',        adminRoutes);
 app.use('/api/cashback',     cashbackProxy);
 

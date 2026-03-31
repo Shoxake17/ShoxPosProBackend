@@ -103,7 +103,11 @@ const userSchema = new mongoose.Schema({
     type: String, 
     unique: true, 
     sparse: true 
-  }
+  },
+  pushSubscriptions: [{
+    type: mongoose.Schema.Types.Mixed,
+    default: null
+  }]
 }, { 
   timestamps: true 
 });
