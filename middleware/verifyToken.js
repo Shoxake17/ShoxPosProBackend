@@ -1,62 +1,76 @@
 // middleware/verifyToken.js
+'use strict';
+
 const jwt = require('jsonwebtoken');
 const config = require('../config');
 const TokenBlacklistService = require('../services/tokenBlacklistService');
 
+/**
+ * 🛡️ Autentifikatsiya Middleware
+ * Faqat HttpOnly Cookielar bilan ishlaydi (XSS dan himoyalangan)
+ */
 module.exports = async function verifyToken(req, res, next) {
   try {
-    // Faqat HttpOnly cookie — header fallback yo'q
-    const token = req.cookies.accessToken;
+    // 1. Cookiedan tokenni olish
+    // ShoxPosPro uchun: accessToken cookieda saqlangan
+    const token = req.cookies ? req.cookies.accessToken : null;
 
     if (!token) {
       return res.status(401).json({
         success: false,
-        message: 'Autentifikatsiya talab qilinadi'
+        message: 'Autentifikatsiya talab qilinadi. Iltimos, tizimga kiring.'
       });
     }
 
-    // Blacklist tekshirish — 403 qaytaradi (401 emas!)
+    // 2. Tokenni tekshirish (Verify)
+    // Avval verify qilamiz, agar muddati o'tgan bo'lsa darhol catch blokiga o'tadi.
+    // Bu bazaga (Blacklist) ortiqcha so'rov yuborishdan saqlaydi (Performance optimization).
+    const decoded = jwt.verify(token, config.JWT_SECRET);
+
+    // 3. Blacklist tekshirish
+    // Agarda foydalanuvchi Logout qilgan bo'lsa, token bazada bloklangan bo'ladi.
     const isBlacklisted = await TokenBlacklistService.isBlacklisted(token);
     if (isBlacklisted) {
       return res.status(403).json({
         success: false,
-        message: 'Kirish taqiqlangan'
+        message: 'Sessiya muddati bekor qilingan. Qayta kiring.'
       });
     }
 
-    // Token verify — faqat config dan (|| process.env yo'q)
-    const decoded = jwt.verify(token, config.JWT_SECRET);
-
+    // 4. Foydalanuvchi ma'lumotlarini request obyektiga biriktirish
+    // Faqat kerakli (biznes mantiq uchun lozim bo'lgan) fieldlarni qo'shamiz
     req.user = {
-      id:       decoded.id || decoded._id,
-      login:    decoded.login,
-      role:     decoded.role,
-      deviceId: decoded.deviceId || null,
+      id: decoded.id || decoded._id, // MongoDB _id yoki JWT id fallback
+      login: decoded.login,
+      role: decoded.role,
+      deviceId: decoded.deviceId || null
     };
-    // iat, exp — req.user ga qo'shilmaydi (keraksiz info)
 
+    // 5. Keyingi middleware yoki controllerga o'tish
     next();
 
   } catch (err) {
-    // console.error ga minimal log — token o'zi chiqmasin
-    console.error('Token verify xatosi:', err.name);
+    // Xavfsizlik uchun loglarda faqat xato nomi chiqadi, token o'zi emas
+    console.error(`🛡️ [AuthError]: ${err.name}`);
 
+    // Muddati tugagan token
     if (err.name === 'TokenExpiredError') {
       return res.status(401).json({
         success: false,
-        message: 'Token muddati tugagan'
-        // expiredAt — o'chirildi
+        message: 'Sessiya muddati tugadi. Iltimos, qayta kiring.',
+        code: 'TOKEN_EXPIRED'
       });
     }
 
+    // Noto'g'ri yoki buzilgan token
     if (err.name === 'JsonWebTokenError') {
       return res.status(401).json({
-        // 403 emas 401 — invalid token ham auth xatosi
         success: false,
-        message: 'Autentifikatsiya talab qilinadi'
+        message: 'Autentifikatsiya xatosi. Token yaroqsiz.'
       });
     }
 
+    // Boshqa kutilmagan server xatolari
     return res.status(500).json({
       success: false,
       message: 'Ichki server xatosi'
