@@ -428,162 +428,6 @@ router.post('/ask-openai', verifyToken, csrfProtection, async (req, res) => {
   }
 });
 
-// 📌 Gemini Pro endpoint
-// 📌 Gemini Pro/Flash endpoint (v2.5 optimized)
-router.post('/ask-gemini', verifyToken, csrfProtection, async (req, res) => {
-  const { question, login, systemOverride, modelId: feModelId } = req.body;
-  
-  if (!question || !login) {
-    return res.status(400).json({ error: 'Savol va login kiritilmagan' });
-  }
-
-  const safeLogin = String(login).trim().toLowerCase();
-  
-  // 🛡️ Xavfsizlik tekshiruvi
-  if (req.user.login !== safeLogin && req.user.role !== 'admin') {
-    return res.status(403).json({ error: "Ruxsat etilmagan!" });
-  }
-
-  try {
-    // 1. Foydalanuvchi xabarini saqlash (Model ID yangilandi)
-    const historyModelId = feModelId || 'gemini-2.5-flash';
-    await saveChatMessage(safeLogin, 'user', question, historyModelId);
-
-    // 2. Kontekstni tayyorlash
-    let contextText = systemOverride || '';
-    if (!systemOverride && login && needsData(question)) {
-      console.log(`[Gemini] Building data context for ${login}...`);
-      contextText = await buildFullContext(login);
-    }
-
-    const systemPrompt = `Men Shoxrux tomonidan yaratilgan ShoxAi modelisan. Do'kon boshqaruv tizimining professional AI yordamchisisisan. O'zbek tilida javob ber.\n\n${contextText}`;
-
-    console.log(`[Gemini] Calling Gemini 2.5 Flash API...`);
-
-    // 3. Google AI Studio API so'rovi
-    // URL v1beta dan v1 ga yoki gemini-2.5-flash ga yangilandi
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
-
-    const response = await axios.post(url, {
-      contents: [
-        {
-          role: 'user',
-          parts: [{ text: `${systemPrompt}\n\nFoydalanuvchi savoli: ${question}` }]
-        }
-      ],
-      // ✨ Yangi: Javob sifatini nazorat qilish uchun parametrlar
-      generationConfig: {
-        temperature: 0.7,
-        topK: 40,
-        topP: 0.95,
-        maxOutputTokens: 2048,
-      }
-    }, {
-      headers: { "Content-Type": "application/json" },
-      timeout: 30000 // 30 soniya
-    });
-
-    // 4. Javobni qabul qilish
-    const answer = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
-    
-    if (!answer) {
-      throw new Error("Gemini modelidan bo'sh javob qaytdi yoki xavfsizlik filtri blokladi.");
-    }
-
-    // 5. AI javobini saqlash
-    await saveChatMessage(safeLogin, 'assistant', answer, historyModelId);
-
-    res.json({ answer });
-
-  } catch (error) {
-    let errorMsg = "Gemini tizimida kutilmagan xatolik yuz berdi.";
-    
-    if (error.response) {
-      const status = error.response.status;
-      const remoteError = error.response.data?.error?.message || "";
-      
-      console.error(`❌ Gemini API Error [${status}]:`, remoteError);
-
-      if (status === 429) {
-        errorMsg = "Google API limiti tugadi. Iltimos, bir necha daqiqadan so'ng urinib ko'ring.";
-      } else if (status === 404) {
-        errorMsg = "Model topilmadi (gemini-2.5-flash). Iltimos, model nomini tekshiring.";
-      } else {
-        errorMsg = `Gemini xatosi: ${remoteError || status}`;
-      }
-    } else if (error.request) {
-      console.error("❌ Gemini Network Error: Serverdan javob kelmadi.");
-      errorMsg = "Internet aloqasi yoki Google serverlari bilan bog'liq muammo.";
-    } else {
-      console.error("❌ Controller Error:", error.message);
-      errorMsg = error.message;
-    }
-
-    res.status(500).json({ error: errorMsg });
-  }
-});
-
-// 📌 Grok AI endpoint
-router.post('/ask-grok', verifyToken, csrfProtection, async (req, res) => {
-  const { question, login, systemOverride, modelId: feModelId } = req.body;
-  if (!question || !login) return res.status(400).json({ error: 'Savol va login kiritilmagan' });
-
-  // 🛡️ A01: Broken Access Control
-  const safeLogin = String(login).trim().toLowerCase();
-  if (req.user.login !== safeLogin && req.user.role !== 'admin') {
-    return res.status(403).json({ error: "Ruxsat etilmagan!" });
-  }
-
-  try {
-    const historyModelId = feModelId || 'grok-ai';
-    // User xabarini saqlash
-    await saveChatMessage(safeLogin, 'user', question, historyModelId);
-
-    let systemPrompt = systemOverride || '';
-    if (!systemOverride && login && needsData(question)) {
-      const context = await buildFullContext(login);
-      systemPrompt = `Sen do'kon boshqaruv tizimining AI yordamchisisisan. O'zbek tilida javob ber.\n${context}`;
-    } else if (!systemOverride) {
-      systemPrompt = 'Sen do\'kon boshqaruv tizimining AI yordamchisisisan. O\'zbek tilida javob ber.';
-    }
-
-    console.log(`[Grok] Calling Grok API...`);
-    const response = await axios.post("https://api.x.ai/v1/chat/completions", {
-      model: "grok-4-latest",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: question }
-      ],
-      stream: false,
-      temperature: 0.7
-    }, {
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${process.env.XAI_API_KEY}`
-      },
-      timeout: 30000
-    });
-
-    const answer = response.data.choices?.[0]?.message?.content || "❌ Javob olinmadi";
-
-    // AI javobini saqlash
-    await saveChatMessage(safeLogin, 'assistant', answer, historyModelId);
-
-    res.json({ answer });
-  } catch (error) {
-    let errorMsg = "Grok bilan aloqa xatosi";
-    if (error.response) {
-      errorMsg = error.response.data?.error?.message || `Grok API Error: ${error.response.status}`;
-    } else if (error.request) {
-      errorMsg = "Grok serveridan javob olinmadi";
-    } else {
-      errorMsg = error.message;
-    }
-    console.error("❌ Grok xatosi:", errorMsg);
-    res.status(500).json({ error: errorMsg });
-  }
-});
-
 // 📌 ShoxAI endpoint 
 router.post('/ask-shoxai', verifyToken, csrfProtection, async (req, res) => {
   const { question, login, systemOverride, modelId: feModelId } = req.body;
@@ -645,9 +489,9 @@ ${context}`;
 
     res.json({ answer });
   } catch (error) {
-    let errorMsg = "ShoxAi (DeepSeek) bilan aloqa xatosi";
+    let errorMsg = "ShoxAi  bilan aloqa xatosi";
     if (error.response) {
-      errorMsg = error.response.data?.error?.message || `ShoxAi API Error: ${error.response.status}`;
+      errorMsg = error.response.data?.error?.message || `ShoxAi Modelida xatolik: ${error.response.status}`;
     } else if (error.request) {
       errorMsg = "ShoxAi serveridan javob olinmadi";
     } else {
@@ -657,6 +501,101 @@ ${context}`;
     res.status(500).json({ error: errorMsg });
   }
 });
+
+// 📌 ShoxAi-Lite endpoint
+router.post('/shoxai-lite', verifyToken, csrfProtection, async (req, res) => {
+  const { question, login, systemOverride, modelId: feModelId } = req.body;
+  
+  if (!question || !login) {
+    return res.status(400).json({ error: 'Savol va login kiritilmagan' });
+  }
+
+  const safeLogin = String(login).trim().toLowerCase();
+  
+  // 🛡️ Xavfsizlik tekshiruvi
+  if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+    return res.status(403).json({ error: "Ruxsat etilmagan!" });
+  }
+
+  try {
+    // 1. Foydalanuvchi xabarini saqlash (Model ID yangilandi)
+    const historyModelId = feModelId || 'gemini-2.5-flash';
+    await saveChatMessage(safeLogin, 'user', question, historyModelId);
+
+    // 2. Kontekstni tayyorlash
+    let contextText = systemOverride || '';
+    if (!systemOverride && login && needsData(question)) {
+      console.log(`[Gemini] Building data context for ${login}...`);
+      contextText = await buildFullContext(login);
+    }
+
+    const systemPrompt = `Men Shoxrux tomonidan yaratilgan ShoxAi-Lite modelisan. Do'kon boshqaruv tizimining professional AI yordamchisisisan. O'zbek tilida javob ber.\n\n${contextText}`;
+
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
+
+    const response = await axios.post(url, {
+      contents: [
+        {
+          role: 'user',
+          parts: [{ text: `${systemPrompt}\n\nFoydalanuvchi savoli: ${question}` }]
+        }
+      ],
+      // ✨ Yangi: Javob sifatini nazorat qilish uchun parametrlar
+      generationConfig: {
+        temperature: 0.7,
+        topK: 40,
+        topP: 0.95,
+        maxOutputTokens: 2048,
+      }
+    }, {
+      headers: { "Content-Type": "application/json" },
+      timeout: 30000 // 30 soniya
+    });
+
+    // 4. Javobni qabul qilish
+    const answer = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    
+    if (!answer) {
+      throw new Error("Gemini modelidan bo'sh javob qaytdi yoki xavfsizlik filtri blokladi.");
+    }
+
+    // 5. AI javobini saqlash
+    await saveChatMessage(safeLogin, 'assistant', answer, historyModelId);
+
+    res.json({ answer });
+
+  } catch (error) {
+    let errorMsg = "Gemini tizimida kutilmagan xatolik yuz berdi.";
+    
+    if (error.response) {
+      const status = error.response.status;
+      const remoteError = error.response.data?.error?.message || "";
+      
+      console.error(`❌ Gemini API Error [${status}]:`, remoteError);
+
+      if (status === 429) {
+        errorMsg = "Google API limiti tugadi. Iltimos, bir necha daqiqadan so'ng urinib ko'ring.";
+      } else if (status === 404) {
+        errorMsg = "Model topilmadi (gemini-2.5-flash). Iltimos, model nomini tekshiring.";
+      } else {
+        errorMsg = `Gemini xatosi: ${remoteError || status}`;
+      }
+    } else if (error.request) {
+      console.error("❌ Gemini Network Error: Serverdan javob kelmadi.");
+      errorMsg = "Internet aloqasi yoki Google serverlari bilan bog'liq muammo.";
+    } else {
+      console.error("❌ Controller Error:", error.message);
+      errorMsg = error.message;
+    }
+
+    res.status(500).json({ error: errorMsg });
+  }
+});
+
+
+
+
 
 // 📌 OpenRouter AI endpoint
 router.post('/ask-openrouter', verifyToken, csrfProtection, async (req, res) => {
