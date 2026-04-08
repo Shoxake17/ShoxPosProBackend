@@ -2,6 +2,10 @@ const express = require('express');
 const mongoose = require('mongoose');
 const verifyToken = require('../middleware/verifyToken');
 const AuditService = require('../services/auditService');
+const User = require('../models/User');
+const ShopType = require('../models/ShopType');
+const SalesBucket = require('../models/SalesBucket');
+const zlib = require('zlib');
 
 module.exports = (csrfProtection) => {
   const router = express.Router();
@@ -71,6 +75,9 @@ router.post('/sell-product/:login', verifyToken, csrfProtection, async (req, res
     const currentDate = new Date();
     const pMethod = paymentMethod || 'cash';
 
+    // Bucket uchun yig'iladigan massiv
+    const bucketPayload = [];
+
     for (const item of sales) {
       const { barcode, name, quantity, price, category, total } = item;
 
@@ -89,6 +96,25 @@ router.post('/sell-product/:login', verifyToken, csrfProtection, async (req, res
           barcode, name, quantity: 0, sold: quantity,
           price: price || 0, basePrice: item.basePrice || 0, category: category || ""
         });
+      }
+
+      // 🏷️ YANGI: Kategoriya userda va ShopType da borligini tekshirish (Sotuv paytida)
+      if (category) {
+        const user = await User.findOne({ login: safeLogin });
+        if (user) {
+          if (!user.shopCategories.includes(category)) {
+            await User.updateOne(
+              { login: safeLogin },
+              { $addToSet: { shopCategories: category } }
+            );
+          }
+          if (user.shopType) {
+            await ShopType.updateOne(
+              { value: user.shopType },
+              { $addToSet: { categories: category } }
+            );
+          }
+        }
       }
 
       // 2️⃣ SALE saqlash
@@ -119,15 +145,61 @@ router.post('/sell-product/:login', verifyToken, csrfProtection, async (req, res
         savedSales.push(saleRecord);
       }
 
+      // Bucketga yozish uchun tayyor ma'lumot
+      bucketPayload.push({
+        barcode, name,
+        quantity, price,
+        basePrice: (product?.basePrice || item.basePrice || 0),
+        category: category || "",
+        total: total || (price * quantity),
+        paymentMethod: pMethod,
+        soldAt: new Date()
+      });
+
       // 📈 PROMETHEUS: Har bir mahsulot uchun login va to'lov turi bo'yicha hisoblash
-      // BU YERDA: Tsikl ichida har bir mahsulotni alohida sanaymiz
       totalSales.labels({ 
         payment_type: pMethod, 
         login: login 
       }).inc();
     }
 
-    // 💰 KESHBEK MONITORINGI
+    // � Sotilganlar (Sotilgan.tsx) uchun: Bucket (gzip) ga saqlash
+    // 7 kunlik bo'lib guruhlaymiz
+    const now = new Date();
+    const dayOfYear = Math.floor((now - new Date(now.getFullYear(), 0, 0)) / (1000 * 60 * 60 * 24));
+    const bucketIndex = Math.floor(dayOfYear / 7);
+    const periodStart = new Date(now.getFullYear(), 0, bucketIndex * 7 + 1);
+    const periodEnd   = new Date(now.getFullYear(), 0, (bucketIndex + 1) * 7);
+    periodStart.setHours(0, 0, 0, 0);
+    periodEnd.setHours(23, 59, 59, 999);
+
+    let bucket = await SalesBucket.findOne({ login: safeLogin, periodStart });
+    let existing = [];
+    if (bucket) {
+      try {
+        const decompressed = zlib.gunzipSync(bucket.data).toString('utf8');
+        existing = JSON.parse(decompressed);
+      } catch {
+        existing = [];
+      }
+    }
+    const merged = existing.concat(bucketPayload);
+    const gz = zlib.gzipSync(Buffer.from(JSON.stringify(merged), 'utf8'));
+
+    if (bucket) {
+      bucket.data = gz;
+      bucket.periodEnd = periodEnd;
+      await bucket.save();
+    } else {
+      await SalesBucket.create({
+        login: safeLogin,
+        periodStart,
+        periodEnd,
+        data: gz
+      });
+    }
+
+    // �💰 KESHBEK MONITORINGI
     if (cashbackAmount && typeof cashbackAmount === 'number') {
       totalCashbackGiven.inc(cashbackAmount);
     }
@@ -153,12 +225,11 @@ router.post('/sell-product/:login', verifyToken, csrfProtection, async (req, res
   }
 });
 
-// ✅ Boshqa GET/DELETE route'lari (o'zgarishsiz qoladi)
+// ✅ Sotuvlarni yuklash
 router.get('/sales/:login', verifyToken, async (req, res) => {
   try {
     const { login } = req.params;
     
-    // 🛡️ A01: Broken Access Control
     const safeLogin = String(login).trim().toLowerCase();
     if (req.user.login !== safeLogin && req.user.role !== 'admin') {
       return res.status(403).json({ success: false, message: 'Ruxsat etilmagan!' });
@@ -172,12 +243,66 @@ router.get('/sales/:login', verifyToken, async (req, res) => {
   }
 });
 
+// 🔹 Sotilganlar (Sotilgan.tsx) uchun — bucketlardan o'qish
+router.get('/sold-buckets/:login', verifyToken, async (req, res) => {
+  try {
+    const { login } = req.params;
+    const safeLogin = String(login).trim().toLowerCase();
+    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Ruxsat etilmagan!' });
+    }
+
+    const buckets = await SalesBucket.find({ login: safeLogin }).sort({ periodStart: -1 });
+    const all = [];
+    for (const b of buckets) {
+      try {
+        const json = zlib.gunzipSync(b.data).toString('utf8');
+        const arr = JSON.parse(json);
+        all.push(...arr);
+      } catch {}
+    }
+    res.json(all);
+  } catch (err) {
+    res.status(500).json({ success: false, error: 'Bucketlarni yuklashda xatolik' });
+  }
+});
+
+router.get('/sold-buckets/:login/by-date', verifyToken, async (req, res) => {
+  try {
+    const { login } = req.params;
+    const { startDate, endDate } = req.query;
+    const safeLogin = String(login).trim().toLowerCase();
+    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Ruxsat etilmagan!' });
+    }
+    const start = startDate ? new Date(startDate) : null;
+    const end   = endDate   ? new Date(endDate)   : null;
+
+    const buckets = await SalesBucket.find({ login: safeLogin }).sort({ periodStart: -1 });
+    let filtered = [];
+    for (const b of buckets) {
+      try {
+        const json = zlib.gunzipSync(b.data).toString('utf8');
+        const arr = JSON.parse(json);
+        for (const s of arr) {
+          const d = new Date(s.soldAt);
+          if (start && d < start) continue;
+          if (end && d > end) continue;
+          filtered.push(s);
+        }
+      } catch {}
+    }
+    res.json(filtered);
+  } catch (err) {
+    res.status(500).json({ success: false, error: 'Bucketlarni filtrlashda xatolik' });
+  }
+});
+
 router.get('/sales/:login/by-date', verifyToken, async (req, res) => {
   try {
     const { login } = req.params;
     const { startDate, endDate } = req.query;
 
-    // 🛡️ A01: Broken Access Control
     const safeLogin = String(login).trim().toLowerCase();
     if (req.user.login !== safeLogin && req.user.role !== 'admin') {
       return res.status(403).json({ success: false, message: 'Ruxsat etilmagan!' });
@@ -201,7 +326,6 @@ router.get('/sales/:login/stats', verifyToken, async (req, res) => {
   try {
     const { login } = req.params;
 
-    // 🛡️ A01: Broken Access Control
     const safeLogin = String(login).trim().toLowerCase();
     if (req.user.login !== safeLogin && req.user.role !== 'admin') {
       return res.status(403).json({ success: false, message: 'Ruxsat etilmagan!' });
@@ -222,7 +346,6 @@ router.delete('/sales/:login/:id', verifyToken, csrfProtection, async (req, res)
   try {
     const { login, id } = req.params;
 
-    // 🛡️ A01: Broken Access Control
     const safeLogin = String(login).trim().toLowerCase();
     if (req.user.login !== safeLogin && req.user.role !== 'admin') {
       return res.status(403).json({ success: false, message: 'Ruxsat etilmagan!' });

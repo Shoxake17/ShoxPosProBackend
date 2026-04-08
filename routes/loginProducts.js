@@ -2,6 +2,8 @@ const express = require("express");
 const mongoose = require("mongoose");
 const verifyToken = require('../middleware/verifyToken');
 const AuditService = require('../services/auditService');
+const User = require('../models/User');
+const ShopType = require('../models/ShopType');
 
 module.exports = (csrfProtection) => {
   const router = express.Router();
@@ -79,8 +81,27 @@ router.get("/products/:login", verifyToken, async (req, res) => {
   }
 
   try {
+    const user = await User.findOne({ login: safeLogin });
+    if (!user) return res.status(404).json({ message: "Foydalanuvchi topilmadi" });
+
+    let effectiveCategories = user.shopCategories || [];
+    if (effectiveCategories.length === 0 && user.shopType) {
+      const typeData = await ShopType.findOne({ value: user.shopType });
+      if (typeData) {
+        effectiveCategories = typeData.categories;
+      }
+    }
+
     const Product = getProductModel(safeLogin);
-    const products = await Product.find({});
+    
+    // 🛡️ Agar hech qanday kategoriya biriktirilmagan bo'lsa, mahsulotlar ko'rinmaydi
+    if (!effectiveCategories || effectiveCategories.length === 0) {
+      return res.json([]);
+    }
+
+    const products = await Product.find({ 
+      category: { $in: effectiveCategories } 
+    });
     res.json(products);
   } catch (err) {
     console.error(err);
@@ -147,6 +168,25 @@ router.post("/sync-products/:login", verifyToken, csrfProtection, async (req, re
         },
         { upsert: true }
       );
+
+      // 🏷️ Kategoriya userda va ShopType da borligini tekshirish (Sync paytida)
+      if (safeCategory) {
+        const user = await User.findOne({ login: safeLogin });
+        if (user) {
+          if (!user.shopCategories.includes(safeCategory)) {
+            await User.updateOne(
+              { login: safeLogin },
+              { $addToSet: { shopCategories: safeCategory } }
+            );
+          }
+          if (user.shopType) {
+            await ShopType.updateOne(
+              { value: user.shopType },
+              { $addToSet: { categories: safeCategory } }
+            );
+          }
+        }
+      }
     }
 
     res.json({ message: "✅ Sinxronlash muvaffaqiyatli" });
@@ -298,6 +338,25 @@ router.post("/update-or-add-user-product", verifyToken, csrfProtection, async (r
       },
       { upsert: true, new: true }
     );
+
+    // 🏷️ YANGI: Kategoriya userda va ShopType da borligini tekshirish
+    if (safeCategory) {
+      const user = await User.findOne({ login: safeLogin });
+      if (user) {
+        if (!user.shopCategories.includes(safeCategory)) {
+          await User.updateOne(
+            { login: safeLogin },
+            { $addToSet: { shopCategories: safeCategory } }
+          );
+        }
+        if (user.shopType) {
+          await ShopType.updateOne(
+            { value: user.shopType },
+            { $addToSet: { categories: safeCategory } }
+          );
+        }
+      }
+    }
 
     res.json({
       success: true,

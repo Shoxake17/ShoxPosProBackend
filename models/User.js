@@ -20,6 +20,18 @@ const userSchema = new mongoose.Schema({
     enum: ['admin', 'cashier'], 
     default: 'cashier' 
   },
+  shopName: {
+    type: String,
+    trim: true,
+    default: null
+  },
+  shopType: { 
+    type: String, 
+    default: "" 
+  },
+  shopCategories: [{ 
+    type: String 
+  }],
   isDeleted: { 
     type: Boolean, 
     default: false 

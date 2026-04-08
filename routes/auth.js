@@ -73,22 +73,44 @@ module.exports = (csrfProtection) => {
     }
   });
 
-  /**
+/**
    * @route POST /api/register
    * @description Yangi foydalanuvchi ro'yxatdan o'tkazish (faqat admin)
    * @access Protected (admin only)
    */
-  router.post('/register', verifyToken, authController.isAdmin, csrfProtection, registerValidation, handleValidationErrors, async (req, res) => {
+  router.post('/register', 
+    verifyToken, 
+    authController.isAdmin, 
+    csrfProtection, 
+    registerValidation, 
+    handleValidationErrors, 
+    authController.register // <-- Bu controller endi shopName va kategoriyalarni saqlaydi
+  );
+
+  router.post(
+  '/update-user-categories',
+  verifyToken,
+  authController.isAdmin,
+  csrfProtection,
+  async (req, res) => {
     try {
-      await authController.register(req, res);
+      await authController.updateUserCategories(req, res);
     } catch (error) {
-      console.error('❌ Register route error:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Server xatosi'
-      });
+      console.error('❌ Update user categories error:', error);
+      res.status(500).json({ success: false, message: 'Kategoriyalarni yangilashda xato' });
     }
-  });
+  }
+);
+ 
+
+  /**
+   * @route GET /api/shop-types
+   * @description Do'kon turlari va kategoriyalarini yuklash
+   */
+  router.get('/shop-types', verifyToken, authController.getShopTypes);
+
+  router.post('/add-shop-category', verifyToken, authController.isAdmin, csrfProtection, authController.addShopCategory);
+
 
   /**
    * @route POST /api/change-password
@@ -270,6 +292,8 @@ module.exports = (csrfProtection) => {
       });
     }
   });
+
+  
 
   router.get('/me', verifyToken, authController.getMe);
   

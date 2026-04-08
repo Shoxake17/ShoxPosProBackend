@@ -1,6 +1,8 @@
 const express = require("express");
 const mongoose = require("mongoose");
 const Product = require("../models/Product");
+const User = require("../models/User");
+const ShopType = require("../models/ShopType");
 const fetch = require("node-fetch").default;
 const { escapeRegex, sanitizeString } = require("../utils/escapeRegex");
 const verifyToken = require("../middleware/verifyToken");
@@ -98,6 +100,26 @@ router.post("/add", verifyToken, csrfProtection, async (req, res) => {
       },
       { upsert: true, new: true }
     );
+
+    // 🏷️ YANGI: Kategoriya userda va ShopType da borligini tekshirish
+    const user = await User.findOne({ login: safeLogin });
+    if (user) {
+      // Userning shopCategories massiviga qo'shish (agar yo'q bo'lsa)
+      if (!user.shopCategories.includes(category)) {
+        await User.updateOne(
+          { login: safeLogin },
+          { $addToSet: { shopCategories: category } }
+        );
+      }
+
+      // ShopType ga qo'shish
+      if (user.shopType) {
+        await ShopType.updateOne(
+          { value: user.shopType },
+          { $addToSet: { categories: category } }
+        );
+      }
+    }
 
     res.json({ message: "Mahsulot muvaffaqiyatli qo'shildi", product: updated });
     
@@ -359,8 +381,28 @@ router.get("/search", async (req, res) => {
 
     if (login) {
       const UserProduct = getProductModel(login);
-      const products = await UserProduct.find(filter).limit(50).sort({ name: 1 });
-      return res.json(products);
+      const userProducts = await UserProduct.find(filter).limit(50).sort({ name: 1 });
+      
+      // Agar qidiruv natijalari kam bo'lsa yoki barcode bo'yicha aniq qidiruv bo'lsa, umumiy bazadan ham qidiramiz
+      if (userProducts.length < 10 || (filter.$or && filter.$or.some(f => f.barcode))) {
+        const globalProducts = await Product.find(filter).limit(50).sort({ name: 1 });
+        
+        // Natijalarni birlashtirish (dublikatlarsiz)
+        const combined = [...userProducts];
+        const userBarcodes = new Set(userProducts.map(p => p.barcode));
+        
+        for (const gp of globalProducts) {
+          if (!userBarcodes.has(gp.barcode)) {
+            // Umumiy bazadan kelganini belgilash (ixtiyoriy, lekin foydali bo'lishi mumkin)
+            const plainGp = gp.toObject();
+            plainGp.isGlobal = true;
+            combined.push(plainGp);
+          }
+        }
+        return res.json(combined.slice(0, 50));
+      }
+      
+      return res.json(userProducts);
     }
 
     const products = await Product.find(filter).limit(50).sort({ name: 1 });

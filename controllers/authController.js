@@ -5,6 +5,7 @@ const UserSession = require('../models/UserSession');
 const AuditService = require('../services/auditService');
 const UserSessionService = require('../services/userSessionService');
 const TokenBlacklistService = require('../services/tokenBlacklistService');
+const ShopType = require('../models/ShopType');
 const { getUserSockets, sendToUser } = require('../socket');
 
 const bcrypt = require('bcrypt');
@@ -197,9 +198,25 @@ exports.login = async (req, res) => {
     res.cookie('accessToken', accessToken, { ...cookieOptions, maxAge: 15 * 60 * 1000 });
     res.cookie('refreshToken', refreshToken, { ...cookieOptions, maxAge: 7 * 24 * 60 * 60 * 1000 });
 
+    // Effektif kategoriyalarni aniqlash
+    let effectiveCategories = user.shopCategories || [];
+    if (effectiveCategories.length === 0 && user.shopType) {
+      const typeData = await ShopType.findOne({ value: user.shopType });
+      if (typeData) {
+        effectiveCategories = typeData.categories;
+      }
+    }
+
     return res.json({
       success: true,
-      user: { login: user.login, role: user.role, name: user.name }
+      user: {
+        login: user.login,
+        role: user.role,
+        name: user.name,
+        shopName: user.shopName,
+        shopType: user.shopType,
+        shopCategories: effectiveCategories
+      }
     });
   } catch (err) {
     if (isDev) console.error("❌ Login Error:", err);
@@ -280,30 +297,62 @@ exports.kickDevice = async (req, res) => {
     }
 
     const user = await User.findOne({ login: { $eq: req.user.login } });
+    if (!user) return res.status(404).json({ message: "Foydalanuvchi topilmadi" });
+
     const device = user.devices.find(d => d.deviceId === deviceId);
 
     if (device?.token) {
       await TokenBlacklistService.add(device.token, { login: user.login, deviceId, reason: 'kicked' });
     }
 
-    // Socket orqali Logout qilish
-    const { io } = require('../server');
-    const { getSocketByDevice } = require('../socket');
+    // 🚀 REAL-TIME FORCE LOGOUT (Socket orqali)
+    const { getIO, getSocketByDevice } = require('../socket');
+    const io = getIO();
     const sockets = getSocketByDevice(user.login, deviceId);
-    sockets.forEach(s => io.to(s).emit('forceLogout', { reason: 'Sessiya tugatildi' }));
-
-    await User.updateOne(
-      { _id: user._id, 'devices.deviceId': deviceId },
-      { $set: { 'devices.$.isActive': false, 'devices.$.token': null, 'devices.$.kickedAt': new Date() } }
-    );
-
-    if (user.activeDevice?.deviceId === deviceId) {
-      await User.updateOne({ _id: user._id }, { $set: { activeDevice: null } });
+    
+    if (io && sockets.length > 0) {
+      sockets.forEach(s => {
+        io.to(s).emit('forceLogout', { 
+          reason: 'Sessiya administrator yoki boshqa qurilmangiz orqali tugatildi.' 
+        });
+      });
+      console.log(`🔴 [Socket] Force logout yuborildi: ${user.login} (Device: ${deviceId})`);
     }
 
-    return res.json({ success: true, message: "Qurilma chiqarildi" });
+    // ── 1. User modelidan qurilmani o'chirish ($pull) ──
+    const updateObj = {
+      $pull: { devices: { deviceId: deviceId } }
+    };
+
+    // Agar o'chirilayotgan qurilma hozirgi activeDevice bo'lsa
+    if (user.activeDevice?.deviceId === deviceId) {
+      updateObj.$set = { activeDevice: null };
+    }
+
+    await User.updateOne({ _id: user._id }, updateObj);
+
+    // ── 2. UserSession dagi barcha sessiyalarni yopish ──
+    await UserSession.updateMany(
+      { userId: user._id, deviceId: deviceId },
+      { 
+        isActive: false, 
+        isBlocked: true, 
+        lastLogout: new Date() 
+      }
+    );
+
+    // Audit log
+    await AuditService.logUserAction({ 
+      login: user.login, 
+      action: 'KICK_DEVICE', 
+      status: 'SUCCESS',
+      details: `Device ID: ${deviceId} chiqarib yuborildi`
+    });
+
+    return res.json({ success: true, message: "Qurilma muvaffaqiyatli chiqarildi" });
   } catch (err) {
-    return res.status(500).json({ message: "Xatolik yuz berdi" });
+    console.error("❌ Kick device error:", err);
+    return res.status(500).json({ success: false, message: "Xatolik yuz berdi" });
   }
 };
 
@@ -341,7 +390,9 @@ exports.register = async (req, res) => {
   try {
     const login    = sanitizeString(req.body.login, 'login').toLowerCase();
     const password = sanitizeString(req.body.password, 'password');
-    
+    const shopName = sanitizeString(req.body.shopName, 'shopName');
+    const shopType  = sanitizeString(req.body.shopType, 'shopType');
+    const shopCategories = req.body.shopCategories || [];
     // 🛡️ Admin faqat bitta bo'lishi kerak. Yangi qo'shiladiganlar faqat 'cashier' bo'ladi.
     const role     = 'cashier';
 
@@ -350,11 +401,62 @@ exports.register = async (req, res) => {
     const exists = await User.findOne({ login: { $eq: login } });
     if (exists) return res.status(409).json({ message: "Login band" });
 
-    const newUser = new User({ login, password, role });
+    const newUser = new User({ login, password, role, shopName, shopType, shopCategories });
     await newUser.save();
+    if (shopCategories.length > 0) {
+      await ShopType.findOneAndUpdate(
+      { value: shopType },
+      { $addToSet: { categories: { $each: shopCategories } } },
+      { upsert: true }
+    );
+    }
     await AuditService.logUserAction({ login, action: 'REGISTER', status: 'SUCCESS' });
 
     return res.status(201).json({ success: true, user: { login, role } });
+  } catch (err) {
+    return res.status(500).json({ message: "Server xatosi" });
+  }
+};
+
+exports.updateUserCategories = async (req, res) => {
+  try {
+    const login          = sanitizeString(req.body.login, 'login').toLowerCase();
+    const shopCategories = req.body.shopCategories;
+    const shopType       = req.body.shopType ? sanitizeString(req.body.shopType, 'shopType') : null;
+ 
+    if (!Array.isArray(shopCategories)) {
+      return res.status(400).json({ message: "shopCategories massiv bo'lishi kerak" });
+    }
+ 
+    const updateData = { shopCategories };
+    if (shopType) updateData.shopType = shopType;
+ 
+    const user = await User.findOneAndUpdate(
+      { login: { $eq: login } },
+      { $set: updateData },
+      { new: true }
+    );
+ 
+    if (!user) return res.status(404).json({ message: "Foydalanuvchi topilmadi" });
+ 
+    // ShopType kolleksiyasiga ham yangi kategoriyalarni qo'shish
+    if (shopCategories.length > 0 && (shopType || user.shopType)) {
+      await ShopType.findOneAndUpdate(
+        { value: shopType || user.shopType },
+        { $addToSet: { categories: { $each: shopCategories } } },
+        { upsert: true }
+      );
+    }
+ 
+    return res.json({
+      success: true,
+      message: "Kategoriyalar yangilandi",
+      user: {
+        login:          user.login,
+        shopType:       user.shopType,
+        shopCategories: user.shopCategories,
+      }
+    });
   } catch (err) {
     return res.status(500).json({ message: "Server xatosi" });
   }
@@ -568,6 +670,15 @@ exports.getMe = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Foydalanuvchi topilmadi' });
     }
 
+    // Effektif kategoriyalarni aniqlash
+    let effectiveCategories = user.shopCategories || [];
+    if (effectiveCategories.length === 0 && user.shopType) {
+      const typeData = await ShopType.findOne({ value: user.shopType });
+      if (typeData) {
+        effectiveCategories = typeData.categories;
+      }
+    }
+
     res.status(200).json({
       success: true,
       user: {
@@ -575,11 +686,110 @@ exports.getMe = async (req, res) => {
         login: user.login,
         role: user.role,
         name: user.name,
-        activeDevice: req.user.deviceId // Middleware'dan kelgan qurilma IDsi
+        shopName: user.shopName,
+        shopType: user.shopType,
+        shopCategories: effectiveCategories,
+        activeDevice: req.user.deviceId 
       }
     });
   } catch (err) {
     res.status(500).json({ success: false, message: 'Server xatosi' });
+  }
+};
+
+exports.getShopTypes = async (req, res) => {
+  try {
+    let types = await ShopType.find({});
+    
+    // 🛡️ SEED & FIX: Barcha so'ralgan do'kon turlari va default kategoriyalar
+    const initialTypes = [
+      { 
+        value: "food", label: "Oziq-ovqat va Supermarketlar", icon: "🛒",
+        categories: ["Don va un", "Go'sht", "Sabzavot", "Mevalar", "Ichimliklar", "Yog'", "Sut mahsulotlari", "Qandolat mahsulotlari"]
+      },
+      { 
+        value: "auto_parts", label: "Avtomobil moylari va Ehtiyot qismlari", icon: "🔧",
+        categories: ["Dvigatel moylari", "Filtrlar", "Akkumulyatorlar", "Shinalar", "Ehtiyot qismlar"]
+      },
+      { 
+        value: "electronics", label: "Maishiy texnika va Elektronika do'konlari", icon: "📺",
+        categories: ["Telefonlar", "Kompyuterlar", "Televizorlar", "Oshxona texnikasi", "Sovutgichlar"]
+      },
+      { 
+        value: "construction", label: "Qurilish mollari va Xo'jalik do'konlari", icon: "🏗️",
+        categories: ["G'isht", "Eshik va derazalar", "Bo'yoqlar", "Santexnika", "Elektr materiallari"]
+      },
+      { 
+        value: "clothing", label: "Kiyim-kechak va Poyabzal do'konlari", icon: "👗",
+        categories: ["Erkaklar kiyimi", "Ayollar kiyimi", "Bolalar kiyimi", "Poyabzal", "Aksessuarlar"]
+      },
+      { 
+        value: "perfumery", label: "Parfumeriya va Kosmetika do'konlari", icon: "🌸",
+        categories: ["Atirlar", "Makiyaj", "Teri parvarishi", "Gigiyena vositalari"]
+      },
+      { 
+        value: "pharmacy", label: "Dorixonalar", icon: "💊",
+        categories: ["Dorilar", "Tibbiy jihozlar", "Vitaminlar", "Gigiyena vositalari"]
+      },
+    ];
+
+    // DB dagi ma'lumotlarni tekshirish va yetishmayotganlarini qo'shish yoki yangilash
+    for (const it of initialTypes) {
+      const exists = await ShopType.findOne({ value: it.value });
+      if (!exists) {
+        await ShopType.create(it);
+      } else {
+        // Label, Icon yoki Kategoriyalar yo'q bo'lsa/o'zgargan bo'lsa yangilash
+        let updated = false;
+        if (!exists.label || exists.label !== it.label) {
+          exists.label = it.label;
+          updated = true;
+        }
+        if (!exists.icon || exists.icon !== it.icon) {
+          exists.icon = it.icon;
+          updated = true;
+        }
+        // Faqat kategoriyalar bo'sh bo'lsa defaultlarni qo'shish
+        if (!exists.categories || exists.categories.length === 0) {
+          exists.categories = it.categories;
+          updated = true;
+        }
+        if (updated) await exists.save();
+      }
+    }
+    
+    // Yangilangan ro'yxatni olish
+    types = await ShopType.find({});
+
+    res.json(types);
+  } catch (err) {
+    res.status(500).json({ message: "Kategoriyalarni yuklashda xato" });
+  }
+};
+
+exports.addShopCategory = async (req, res) => {
+  try {
+    const { shopType, category, label, icon } = req.body;
+    if (!shopType || !category) {
+      return res.status(400).json({ message: "shopType va category kerak" });
+    }
+
+    const update = { $addToSet: { categories: category } };
+    if (label || icon) {
+      update.$set = {};
+      if (label) update.$set.label = label;
+      if (icon) update.$set.icon = icon;
+    }
+
+    const updated = await ShopType.findOneAndUpdate(
+      { value: shopType },
+      update,
+      { upsert: true, new: true }
+    );
+
+    res.json({ success: true, shopType: updated });
+  } catch (err) {
+    res.status(500).json({ message: "Kategoriya qo'shishda xato" });
   }
 };
 
