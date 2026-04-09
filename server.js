@@ -57,9 +57,7 @@ app.use(cors({
     exposedHeaders: ['CSRF-Token', 'X-CSRF-Token'],
 }));
 
-// ====================================
 // 🛡️ HELMET (XAVFSIZLIK HEADERLARI)
-// ====================================
 app.use(helmet({
     contentSecurityPolicy: {
         directives: {
@@ -113,9 +111,7 @@ const csrfProtection = csrf({
     }
 });
 
-// ====================================
-// 🛡️ RATE LIMIT
-// ====================================
+// 🛡️ Rate Limit
 const csrfLimiter = rateLimit({
     windowMs: 10 * 60 * 1000,
     max: 100,

@@ -1,9 +1,9 @@
 const express = require("express");
-const mongoose = require("mongoose");
 const verifyToken = require('../middleware/verifyToken');
 const AuditService = require('../services/auditService');
 const User = require('../models/User');
 const ShopType = require('../models/ShopType');
+const Product = require('../models/Product');
 
 module.exports = (csrfProtection) => {
   const router = express.Router();
@@ -43,28 +43,6 @@ function sanitizeName(value) {
 }
 
 // ====================================================================
-// 🔹 Dinamik model — faqat sanitizatsiyadan o'tgan login
-// ====================================================================
-function getProductModel(safeLogin) {
-  const collectionName = `products_${safeLogin}`;
-  const modelName = `Product_${safeLogin}`;
-
-  if (mongoose.models[modelName]) return mongoose.models[modelName];
-
-  const schema = new mongoose.Schema({
-    name:      String,
-    barcode:   String,
-    basePrice: Number,
-    price:     Number,
-    category:  String,
-    quantity:  Number,
-    sold:      { type: Number, default: 0 }
-  });
-
-  return mongoose.model(modelName, schema, collectionName);
-}
-
-// ====================================================================
 // GET /products/:login
 // ====================================================================
 router.get("/products/:login", verifyToken, async (req, res) => {
@@ -92,14 +70,13 @@ router.get("/products/:login", verifyToken, async (req, res) => {
       }
     }
 
-    const Product = getProductModel(safeLogin);
-    
     // 🛡️ Agar hech qanday kategoriya biriktirilmagan bo'lsa, mahsulotlar ko'rinmaydi
     if (!effectiveCategories || effectiveCategories.length === 0) {
       return res.json([]);
     }
 
     const products = await Product.find({ 
+      login: safeLogin,
       category: { $in: effectiveCategories } 
     });
     res.json(products);
@@ -131,8 +108,6 @@ router.post("/sync-products/:login", verifyToken, csrfProtection, async (req, re
   }
 
   try {
-    const Product = getProductModel(safeLogin);
-    
     // Sync logic (replace/upsert) - log it
     await AuditService.logUserAction({
       login: req.user.login,
@@ -155,7 +130,7 @@ router.post("/sync-products/:login", verifyToken, csrfProtection, async (req, re
       }
 
       await Product.updateOne(
-        { barcode: { $eq: safeBarcode } },
+        { login: safeLogin, barcode: { $eq: safeBarcode } },
         {
           $set: {
             name:      safeName,
@@ -196,35 +171,33 @@ router.post("/sync-products/:login", verifyToken, csrfProtection, async (req, re
   }
 });
 
-// ====================================================================
 // POST /update-price/:login
 // ====================================================================
 router.post("/update-price/:login", verifyToken, csrfProtection, async (req, res) => {
-  let safeLogin, safeBarcode, safePrice;
+  let safeLogin;
   try {
-    safeLogin   = sanitizeLogin(req.params.login);
-
-    // 🛡️ A01: Broken Access Control
+    safeLogin = sanitizeLogin(req.params.login);
     if (req.user.login !== safeLogin && req.user.role !== 'admin') {
       return res.status(403).json({ message: "Ruxsat etilmagan!" });
     }
-
-    safeBarcode = sanitizeBarcode(req.body.barcode);
-    safePrice   = sanitizeNumber(req.body.newPrice, 'newPrice');
   } catch (e) {
     return res.status(400).json({ message: e.message });
   }
 
+  const { barcode, price } = req.body;
   try {
-    const Product = getProductModel(safeLogin);
-    await Product.updateOne(
-      { barcode: { $eq: safeBarcode } },
-      { $set: { price: safePrice } }
+    const sBarcode = sanitizeBarcode(barcode);
+    const sPrice   = sanitizeNumber(price, 'price');
+
+    const updated = await Product.findOneAndUpdate(
+      { login: safeLogin, barcode: sBarcode },
+      { $set: { price: sPrice } },
+      { new: true }
     );
-    res.json({ message: "✅ Narx yangilandi" });
+    if (!updated) return res.status(404).json({ message: "Mahsulot topilmadi" });
+    res.json({ success: true, product: updated });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Server xatosi" });
+    res.status(400).json({ message: err.message });
   }
 });
 
@@ -232,70 +205,61 @@ router.post("/update-price/:login", verifyToken, csrfProtection, async (req, res
 // POST /update-base-price/:login
 // ====================================================================
 router.post("/update-base-price/:login", verifyToken, csrfProtection, async (req, res) => {
-  let safeLogin, safeBarcode, safeBasePrice;
+  let safeLogin;
   try {
-    safeLogin     = sanitizeLogin(req.params.login);
-
-    // 🛡️ A01: Broken Access Control
+    safeLogin = sanitizeLogin(req.params.login);
     if (req.user.login !== safeLogin && req.user.role !== 'admin') {
       return res.status(403).json({ message: "Ruxsat etilmagan!" });
     }
-
-    safeBarcode   = sanitizeBarcode(req.body.barcode);
-    safeBasePrice = sanitizeNumber(req.body.newBasePrice, 'newBasePrice');
   } catch (e) {
     return res.status(400).json({ message: e.message });
   }
 
+  const { barcode, basePrice } = req.body;
   try {
-    const Product = getProductModel(safeLogin);
+    const sBarcode   = sanitizeBarcode(barcode);
+    const sBasePrice = sanitizeNumber(basePrice, 'basePrice');
 
-    const updated = await Product.updateOne(
-      { barcode: { $eq: safeBarcode } },
-      { $set: { basePrice: safeBasePrice } }
+    const updated = await Product.findOneAndUpdate(
+      { login: safeLogin, barcode: sBarcode },
+      { $set: { basePrice: sBasePrice } },
+      { new: true }
     );
-
-    if (updated.matchedCount === 0) {
-      return res.status(404).json({ message: "Mahsulot topilmadi" });
-    }
-
-    const updatedProduct = await Product.findOne({ barcode: { $eq: safeBarcode } });
-    res.json({ message: "✅ Ulgurji narx yangilandi", product: updatedProduct });
+    if (!updated) return res.status(404).json({ message: "Mahsulot topilmadi" });
+    res.json({ success: true, product: updated });
   } catch (err) {
-    console.error("❌ Base price update xatosi:", err);
-    res.status(500).json({ message: "Server xatosi" });
+    res.status(400).json({ message: err.message });
   }
 });
 
 // ====================================================================
-// POST /delete-product/:login
+// POST /update-quantity/:login
 // ====================================================================
-router.post("/delete-product/:login", verifyToken, csrfProtection, async (req, res) => {
-  let safeLogin, safeBarcode;
+router.post("/update-quantity/:login", verifyToken, csrfProtection, async (req, res) => {
+  let safeLogin;
   try {
-    safeLogin   = sanitizeLogin(req.params.login);
-
-    // 🛡️ A01: Broken Access Control
+    safeLogin = sanitizeLogin(req.params.login);
     if (req.user.login !== safeLogin && req.user.role !== 'admin') {
       return res.status(403).json({ message: "Ruxsat etilmagan!" });
     }
-
-    safeBarcode = sanitizeBarcode(req.body.barcode);
   } catch (e) {
     return res.status(400).json({ message: e.message });
   }
 
+  const { barcode, quantity } = req.body;
   try {
-    const Product = getProductModel(safeLogin);
-    const deleted = await Product.deleteOne({ barcode: { $eq: safeBarcode } });
+    const sBarcode = sanitizeBarcode(barcode);
+    const sQty     = sanitizeNumber(quantity, 'quantity');
 
-    if (deleted.deletedCount === 0) {
-      return res.status(404).json({ message: "Mahsulot topilmadi" });
-    }
-    res.json({ message: "✅ Mahsulot o'chirildi" });
+    const updated = await Product.findOneAndUpdate(
+      { login: safeLogin, barcode: sBarcode },
+      { $set: { quantity: sQty } },
+      { new: true }
+    );
+    if (!updated) return res.status(404).json({ message: "Mahsulot topilmadi" });
+    res.json({ success: true, product: updated });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Server xatosi" });
+    res.status(400).json({ message: err.message });
   }
 });
 
@@ -303,68 +267,91 @@ router.post("/delete-product/:login", verifyToken, csrfProtection, async (req, r
 // POST /update-or-add-user-product
 // ====================================================================
 router.post("/update-or-add-user-product", verifyToken, csrfProtection, async (req, res) => {
-  let safeLogin, safeBarcode, safeName, safePrice, safeBasePrice, safeQty, safeCategory;
+  let safeLogin;
   try {
-    safeLogin     = sanitizeLogin(req.body.login);
-
-    // 🛡️ A01: Broken Access Control
+    safeLogin = sanitizeLogin(req.body.login);
     if (req.user.login !== safeLogin && req.user.role !== 'admin') {
       return res.status(403).json({ message: "Ruxsat etilmagan!" });
     }
-
-    safeBarcode   = sanitizeBarcode(req.body.barcode);
-    safeName      = sanitizeName(req.body.name);
-    safePrice     = sanitizeNumber(req.body.price     ?? 0, 'price');
-    safeBasePrice = sanitizeNumber(req.body.basePrice ?? 0, 'basePrice');
-    safeQty       = sanitizeNumber(req.body.quantity  ?? 0, 'quantity');
-    safeCategory  = sanitizeCategory(req.body.category ?? '');
   } catch (e) {
     return res.status(400).json({ message: e.message });
   }
 
+  const { barcode, name, price, basePrice, quantity, category } = req.body;
+
   try {
-    const Product = getProductModel(safeLogin);
+    const sBarcode   = sanitizeBarcode(barcode);
+    const sName      = sanitizeName(name);
+    const sPrice     = sanitizeNumber(price, 'price');
+    const sBasePrice = sanitizeNumber(basePrice || 0, 'basePrice');
+    const sQty       = sanitizeNumber(quantity || 0, 'quantity');
+    const sCategory  = sanitizeCategory(category);
 
     const updated = await Product.findOneAndUpdate(
-      { barcode: { $eq: safeBarcode } },
+      { login: safeLogin, barcode: sBarcode },
       {
         $set: {
-          name:      safeName,
-          price:     safePrice,
-          basePrice: safeBasePrice,
-          category:  safeCategory,
-          quantity:  safeQty
+          name:      sName,
+          price:     sPrice,
+          basePrice: sBasePrice,
+          quantity:  sQty,
+          category:  sCategory
         }
       },
       { upsert: true, new: true }
     );
 
-    // 🏷️ YANGI: Kategoriya userda va ShopType da borligini tekshirish
-    if (safeCategory) {
+    // 🏷️ Kategoriya userda va ShopType da borligini tekshirish
+    if (sCategory) {
+      await User.updateOne(
+        { login: safeLogin },
+        { $addToSet: { shopCategories: sCategory } }
+      );
       const user = await User.findOne({ login: safeLogin });
-      if (user) {
-        if (!user.shopCategories.includes(safeCategory)) {
-          await User.updateOne(
-            { login: safeLogin },
-            { $addToSet: { shopCategories: safeCategory } }
-          );
-        }
-        if (user.shopType) {
-          await ShopType.updateOne(
-            { value: user.shopType },
-            { $addToSet: { categories: safeCategory } }
-          );
-        }
+      if (user?.shopType) {
+        await ShopType.updateOne(
+          { value: user.shopType },
+          { $addToSet: { categories: sCategory } }
+        );
       }
     }
 
-    res.json({
-      success: true,
-      message: "Mahsulot saqlandi",
-      product: updated
-    });
+    res.json({ success: true, product: updated });
   } catch (err) {
-    console.error("/update-or-add-user-product xatosi:", err);
+    res.status(400).json({ message: err.message });
+  }
+});
+
+// ====================================================================
+// DELETE /delete-product/:login/:barcode
+// ====================================================================
+router.delete("/delete-product/:login/:barcode", verifyToken, csrfProtection, async (req, res) => {
+  let safeLogin;
+  try {
+    safeLogin = sanitizeLogin(req.params.login);
+    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      return res.status(403).json({ message: "Ruxsat etilmagan!" });
+    }
+  } catch (e) {
+    return res.status(400).json({ message: e.message });
+  }
+
+  try {
+    const sBarcode = sanitizeBarcode(req.params.barcode);
+    const deleted = await Product.findOneAndDelete({ login: safeLogin, barcode: sBarcode });
+
+    if (!deleted) return res.status(404).json({ message: "Mahsulot topilmadi" });
+
+    // 📈 Audit log
+    await AuditService.logUserAction({
+      login: req.user.login,
+      action: 'DELETE_PRODUCT',
+      status: 'SUCCESS',
+      details: { barcode: sBarcode }
+    });
+
+    res.json({ success: true, message: "Mahsulot o'chirildi" });
+  } catch (err) {
     res.status(500).json({ message: "Server xatosi" });
   }
 });
@@ -395,15 +382,13 @@ router.post("/ai-query/:login", verifyToken, csrfProtection, async (req, res) =>
   const safeQuery = query.toLowerCase().trim();
 
   try {
-    const Product = getProductModel(safeLogin);
-
     if (safeQuery.includes("mahsulotlar")) {
-      const products = await Product.find({}).lean();
+      const products = await Product.find({ login: safeLogin }).lean();
       return res.json({ type: 'products', data: products });
     }
 
     if (safeQuery.includes("sotilgan")) {
-      const products = await Product.find({ sold: { $gt: 0 } }).lean();
+      const products = await Product.find({ login: safeLogin, sold: { $gt: 0 } }).lean();
       return res.json({ type: 'sold', data: products });
     }
 

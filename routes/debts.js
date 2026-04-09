@@ -1,32 +1,9 @@
 const express = require("express");
-const mongoose = require("mongoose");
 const verifyToken = require('../middleware/verifyToken');
+const Debt = require('../models/Debt');
 
 module.exports = (csrfProtection) => {
   const router = express.Router();
-
-// Dinamik Qarzlar modelis
-function getDebtsModel(login) {
-  // 🛡️ A03: Input validation
-  if (!/^[a-zA-Z0-9_-]+$/.test(login)) {
-    throw new Error("Login formati noto'g'ri!");
-  }
-  const collectionName = `debts_${login}`;
-  
-  // Agar model allaqachon yaratilgan bo'lsa, qaytar
-  if (mongoose.models[collectionName]) {
-    return mongoose.models[collectionName];
-  }
-
-  const debtSchema = new mongoose.Schema({
-    name: { type: String, required: true },
-    phone: { type: String, required: true },
-    amount: { type: Number, required: true },
-    lastPayment: { type: Date, default: Date.now }
-  }, { timestamps: true });
-
-  return mongoose.model(collectionName, debtSchema, collectionName);
-}
 
 // Barcha qarzlarni olish
 router.get("/debts/:login", verifyToken, async (req, res) => {
@@ -39,9 +16,7 @@ router.get("/debts/:login", verifyToken, async (req, res) => {
       return res.status(403).json({ message: "Ruxsat etilmagan!" });
     }
 
-    const Debts = getDebtsModel(login);
-
-    const debts = await Debts.find({}).sort({ lastPayment: -1 }).lean();
+    const debts = await Debt.find({ login: safeLogin }).sort({ lastPayment: -1 }).lean();
 
     const formattedDebts = debts.map(debt => ({
       id: debt._id.toString(),
@@ -74,9 +49,8 @@ router.post("/debts/:login", verifyToken, csrfProtection, async (req, res) => {
       return res.status(400).json({ message: "Ma'lumotlar to'liq emas yoki noto'g'ri" });
     }
 
-    const Debts = getDebtsModel(login);
-
-    const newDebt = await Debts.create({
+    const newDebt = await Debt.create({
+      login: safeLogin,
       name: name.trim(),
       phone,
       amount: Number(amount)
@@ -111,8 +85,7 @@ router.post("/debts/pay/:login", verifyToken, csrfProtection, async (req, res) =
       return res.status(400).json({ message: "To'lov ma'lumotlari noto'g'ri" });
     }
 
-    const Debts = getDebtsModel(login);
-    const debt = await Debts.findById(debtId);
+    const debt = await Debt.findOne({ _id: debtId, login: safeLogin });
 
     if (!debt) {
       return res.status(404).json({ message: "Qarz topilmadi" });
@@ -122,7 +95,7 @@ router.post("/debts/pay/:login", verifyToken, csrfProtection, async (req, res) =
 
     if (paid >= debt.amount) {
       // To'liq to'landi — o'chirib tashlaymiz
-      await Debts.findByIdAndDelete(debtId);
+      await Debt.findOneAndDelete({ _id: debtId, login: safeLogin });
       res.json({ action: "fully_paid" });
     } else {
       // Qisman to'lov

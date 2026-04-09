@@ -80,52 +80,9 @@ async function getChatHistory(login) {
   }
 }
 
-// ─── Dinamik Modellar ──────────────────────────────────────────────────
-function getSalesModel(login) {
-  const collectionName = `sales_${login}`;
-  const modelName = `Sale_${login}`;
-  if (mongoose.models[modelName]) return mongoose.models[modelName];
-  const schema = new mongoose.Schema({
-    barcode: String,
-    name: String,
-    quantity: Number,
-    price: Number,
-    basePrice: Number,
-    category: String,
-    total: Number,
-    paymentMethod: { type: String, default: 'cash' },
-    soldAt: { type: Date, default: Date.now }
-  });
-  return mongoose.model(modelName, schema, collectionName);
-}
-
-// Dinamik Debts model
-function getDebtsModel(login) {
-  const collectionName = `debts_${login}`;
-  if (mongoose.models[collectionName]) return mongoose.models[collectionName];
-  const schema = new mongoose.Schema({
-    name: String, phone: String, amount: Number,
-    lastPayment: { type: Date, default: Date.now }
-  }, { timestamps: true });
-  return mongoose.model(collectionName, schema, collectionName);
-}
-
-// Dinamik Products model
-function getProductModel(login) {
-  const collectionName = `products_${login}`;
-  const modelName = `Product_${login}`;
-  if (mongoose.models[modelName]) return mongoose.models[modelName];
-  const schema = new mongoose.Schema({
-    barcode: String,
-    name: String,
-    basePrice: Number,
-    price: Number,
-    category: String,
-    quantity: Number,
-    sold: { type: Number, default: 0 }
-  });
-  return mongoose.model(modelName, schema, collectionName);
-}
+const Sale = require('../models/Sale');
+const Debt = require('../models/Debt');
+const Product = require('../models/Product');
 
 // Savolga ma'lumot kerakligini aniqlash
 function needsData(question) {
@@ -142,12 +99,11 @@ function needsData(question) {
 // Ma'lumotlar kontekstini yaratish
 async function buildFullContext(login) {
   try {
-    const Sales = getSalesModel(login);
-    const Product = getProductModel(login);
+    const safeLogin = String(login).trim().toLowerCase();
 
     const [allSales, allProducts] = await Promise.all([
-      Sales.find().sort({ soldAt: -1 }).lean(),
-      Product.find().lean()
+      Sale.find({ login: safeLogin }).sort({ soldAt: -1 }).lean(),
+      Product.find({ login: safeLogin }).lean()
     ]);
 
     const now = new Date();
@@ -204,8 +160,7 @@ async function buildFullContext(login) {
     // Qarzdorlar
     let debtsContext = "  Ma'lumot yo'q";
     try {
-      const Debts = getDebtsModel(login);
-      const allDebts = await Debts.find({}).lean();
+      const allDebts = await Debt.find({ login: safeLogin }).lean();
       const totalDebt = allDebts.reduce((s, d) => s + (d.amount || 0), 0);
       if (allDebts.length > 0) {
         const top10debts = allDebts.sort((a, b) => b.amount - a.amount).slice(0, 10);
@@ -525,7 +480,7 @@ router.post('/shoxai-lite', verifyToken, csrfProtection, async (req, res) => {
     // 2. Kontekstni tayyorlash
     let contextText = systemOverride || '';
     if (!systemOverride && login && needsData(question)) {
-      console.log(`[Gemini] Building data context for ${login}...`);
+      console.log(`[ShoxAI Lite] Building data context for ${login}...`);
       contextText = await buildFullContext(login);
     }
 
@@ -557,7 +512,7 @@ router.post('/shoxai-lite', verifyToken, csrfProtection, async (req, res) => {
     const answer = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
     
     if (!answer) {
-      throw new Error("Gemini modelidan bo'sh javob qaytdi yoki xavfsizlik filtri blokladi.");
+      throw new Error("ShoxAI Lite modelidan bo'sh javob qaytdi yoki xavfsizlik filtri blokladi.");
     }
 
     // 5. AI javobini saqlash
@@ -566,23 +521,23 @@ router.post('/shoxai-lite', verifyToken, csrfProtection, async (req, res) => {
     res.json({ answer });
 
   } catch (error) {
-    let errorMsg = "Gemini tizimida kutilmagan xatolik yuz berdi.";
+    let errorMsg = "ShoxAi Lite tizimida kutilmagan xatolik yuz berdi.";
     
     if (error.response) {
       const status = error.response.status;
       const remoteError = error.response.data?.error?.message || "";
       
-      console.error(`❌ Gemini API Error [${status}]:`, remoteError);
+      console.error(`❌ ShoxAI Lite API Error [Ushbu modelga hozirda talab yuqori. Talabning keskin o'sishi odatda vaqtinchalik. Iltimos, keyinroq qayta urinib ko'ring.]:`, remoteError);
 
       if (status === 429) {
-        errorMsg = "Google API limiti tugadi. Iltimos, bir necha daqiqadan so'ng urinib ko'ring.";
+        errorMsg = "ShoxAI Lite limiti tugadi. Iltimos, bir necha daqiqadan so'ng urinib ko'ring.";
       } else if (status === 404) {
-        errorMsg = "Model topilmadi (gemini-2.5-flash). Iltimos, model nomini tekshiring.";
+        errorMsg = "Model topilmadi (ShoxAI Lite). Iltimos, model nomini tekshiring.";
       } else {
-        errorMsg = `Gemini xatosi: ${remoteError || status}`;
+        errorMsg = `ShoxAI Lite xatosi: ${remoteError || status}`;
       }
     } else if (error.request) {
-      console.error("❌ Gemini Network Error: Serverdan javob kelmadi.");
+      console.error("❌ ShoxAI Lite Network Error: Serverdan javob kelmadi.");
       errorMsg = "Internet aloqasi yoki Google serverlari bilan bog'liq muammo.";
     } else {
       console.error("❌ Controller Error:", error.message);

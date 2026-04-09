@@ -4,6 +4,8 @@ const verifyToken = require('../middleware/verifyToken');
 const AuditService = require('../services/auditService');
 const User = require('../models/User');
 const ShopType = require('../models/ShopType');
+const Product = require('../models/Product');
+const Sale = require('../models/Sale');
 const SalesBucket = require('../models/SalesBucket');
 const zlib = require('zlib');
 
@@ -12,46 +14,6 @@ module.exports = (csrfProtection) => {
 
   // 📈 Prometheus metrikalarini import qilamiz
   const { totalSales, totalCashbackGiven } = require('./metrics'); 
-
-// 🔹 Dinamik Product model
-function getProductModel(login) {
-  // 🛡️ A03: Input validation
-  if (!/^[a-zA-Z0-9_-]+$/.test(login)) {
-    throw new Error("Login formati noto'g'ri!");
-  }
-  const collectionName = `products_${login}`;
-  const modelName = `Product_${login}`;
-  if (mongoose.models[modelName]) return mongoose.models[modelName];
-  const schema = new mongoose.Schema({
-    name: String,
-    barcode: String,
-    basePrice: Number,
-    price: Number,
-    category: String,
-    quantity: Number,
-    sold: { type: Number, default: 0 }
-  });
-  return mongoose.model(modelName, schema, collectionName);
-}
-
-// 🔹 Dinamik Sales model
-function getSalesModel(login) {
-  const collectionName = `sales_${login}`;
-  const modelName = `Sale_${login}`;
-  if (mongoose.models[modelName]) return mongoose.models[modelName];
-  const schema = new mongoose.Schema({
-    barcode: String,
-    name: String,
-    quantity: Number,
-    price: Number,
-    basePrice: Number,
-    category: String,
-    total: Number,
-    paymentMethod: { type: String, default: 'cash' },
-    soldAt: { type: Date, default: Date.now } 
-  });
-  return mongoose.model(modelName, schema, collectionName);
-}
 
 // ✅ Sotuvlarni saqlash - To'liq Monitoring bilan
 router.post('/sell-product/:login', verifyToken, csrfProtection, async (req, res) => {
@@ -69,8 +31,6 @@ router.post('/sell-product/:login', verifyToken, csrfProtection, async (req, res
       return res.status(400).json({ success: false, message: 'Sales bo\'sh yoki noto\'g\'ri formatda' });
     }
 
-    const Product = getProductModel(login);
-    const Sales = getSalesModel(login);
     const savedSales = [];
     const currentDate = new Date();
     const pMethod = paymentMethod || 'cash';
@@ -85,14 +45,15 @@ router.post('/sell-product/:login', verifyToken, csrfProtection, async (req, res
         return res.status(400).json({ success: false, message: "Noto'g'ri ma'lumot formatida" });
       }
 
-      // 1️⃣ PRODUCT yangilash
-      const product = await Product.findOne({ barcode });
+      // 1️⃣ PRODUCT yangilash (Shared products collection)
+      const product = await Product.findOne({ login: safeLogin, barcode });
       if (product) {
         product.quantity = Math.max(0, product.quantity - quantity);
         product.sold = (product.sold || 0) + quantity;
         await product.save();
       } else {
         await Product.create({
+          login: safeLogin,
           barcode, name, quantity: 0, sold: quantity,
           price: price || 0, basePrice: item.basePrice || 0, category: category || ""
         });
@@ -117,11 +78,12 @@ router.post('/sell-product/:login', verifyToken, csrfProtection, async (req, res
         }
       }
 
-      // 2️⃣ SALE saqlash
+      // 2️⃣ SALE saqlash (Shared sales collection - Lifetime)
       const todayStart = new Date(currentDate.setHours(0, 0, 0, 0));
       const todayEnd = new Date(currentDate.setHours(23, 59, 59, 999));
 
-      const existingSale = await Sales.findOne({
+      const existingSale = await Sale.findOne({
+        login: safeLogin,
         barcode: barcode,
         paymentMethod: pMethod,
         soldAt: { $gte: todayStart, $lte: todayEnd }
@@ -134,7 +96,8 @@ router.post('/sell-product/:login', verifyToken, csrfProtection, async (req, res
         await existingSale.save();
         savedSales.push(existingSale);
       } else {
-        const saleRecord = await Sales.create({
+        const saleRecord = await Sale.create({
+          login: safeLogin,
           barcode, name, quantity, price,
           basePrice: product?.basePrice || item.basePrice || 0,
           category: category || "",
@@ -163,8 +126,7 @@ router.post('/sell-product/:login', verifyToken, csrfProtection, async (req, res
       }).inc();
     }
 
-    // � Sotilganlar (Sotilgan.tsx) uchun: Bucket (gzip) ga saqlash
-    // 7 kunlik bo'lib guruhlaymiz
+    // � Sotilganlar (Sotilgan.tsx) uchun: Bucket (gzip) ga saqlash (Shared salesbuckets - 30 days)
     const now = new Date();
     const dayOfYear = Math.floor((now - new Date(now.getFullYear(), 0, 0)) / (1000 * 60 * 60 * 24));
     const bucketIndex = Math.floor(dayOfYear / 7);
@@ -225,7 +187,7 @@ router.post('/sell-product/:login', verifyToken, csrfProtection, async (req, res
   }
 });
 
-// ✅ Sotuvlarni yuklash
+// ✅ Sotuvlarni yuklash (Lifetime archive dan)
 router.get('/sales/:login', verifyToken, async (req, res) => {
   try {
     const { login } = req.params;
@@ -235,8 +197,7 @@ router.get('/sales/:login', verifyToken, async (req, res) => {
       return res.status(403).json({ success: false, message: 'Ruxsat etilmagan!' });
     }
 
-    const Sales = getSalesModel(login);
-    const reports = await Sales.find().sort({ soldAt: -1 }).lean();
+    const reports = await Sale.find({ login: safeLogin }).sort({ soldAt: -1 }).lean();
     res.json(reports);
   } catch (err) {
     res.status(500).json({ success: false, error: 'Sotuvlarni yuklashda xatolik' });
@@ -308,14 +269,13 @@ router.get('/sales/:login/by-date', verifyToken, async (req, res) => {
       return res.status(403).json({ success: false, message: 'Ruxsat etilmagan!' });
     }
 
-    const Sales = getSalesModel(login);
-    const query = {};
+    const query = { login: safeLogin };
     if (startDate || endDate) {
       query.soldAt = {};
       if (startDate) query.soldAt.$gte = new Date(startDate);
       if (endDate) query.soldAt.$lte = new Date(endDate);
     }
-    const reports = await Sales.find(query).sort({ soldAt: -1 }).lean();
+    const reports = await Sale.find(query).sort({ soldAt: -1 }).lean();
     res.json(reports);
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -331,8 +291,8 @@ router.get('/sales/:login/stats', verifyToken, async (req, res) => {
       return res.status(403).json({ success: false, message: 'Ruxsat etilmagan!' });
     }
 
-    const Sales = getSalesModel(login);
-    const stats = await Sales.aggregate([
+    const stats = await Sale.aggregate([
+      { $match: { login: safeLogin } },
       { $group: { _id: '$category', totalSales: { $sum: '$total' }, totalQuantity: { $sum: '$quantity' }, count: { $sum: 1 } } },
       { $sort: { totalSales: -1 } }
     ]);
@@ -351,8 +311,7 @@ router.delete('/sales/:login/:id', verifyToken, csrfProtection, async (req, res)
       return res.status(403).json({ success: false, message: 'Ruxsat etilmagan!' });
     }
 
-    const Sales = getSalesModel(login);
-    const deleted = await Sales.findByIdAndDelete(id);
+    const deleted = await Sale.findOneAndDelete({ _id: id, login: safeLogin });
     if (!deleted) return res.status(404).json({ success: false, error: 'Sotuv topilmadi' });
     
     // 📈 Audit log
