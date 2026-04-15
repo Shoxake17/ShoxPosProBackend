@@ -17,6 +17,9 @@ const config = require('./config');
 const connectDB = require('./config/db');
 const { initIO } = require('./socket');
 
+// 🚀 Redis Cache - Professional caching tizimi
+const redisClient = require('./config/redis');
+
 // Middlewarelar
 const verifyToken = require('./middleware/verifyToken');
 const apiLimiter = require('./middleware/apiRateLimit');
@@ -57,7 +60,7 @@ app.use(cors({
     exposedHeaders: ['CSRF-Token', 'X-CSRF-Token'],
 }));
 
-// 🛡️ HELMET (XAVFSIZLIK HEADERLARI)
+// HELMET (XAVFSIZLIK HEADERLARI)
 app.use(helmet({
     contentSecurityPolicy: {
         directives: {
@@ -69,12 +72,20 @@ app.use(helmet({
             connectSrc: [
                 "'self'",
                 'ws:', 'wss:',
+                'http://localhost:3000',
+                'http://localhost:3001',
                 'http://localhost:4000', // ShoxPay Backend ulanishi uchun
+                'http://127.0.0.1:3000',
                 'https://cdn.jsdelivr.net',
                 'https://freeipapi.com',
+                'https://free.freeipapi.com',
                 'https://ipapi.co',
                 'https://flagcdn.com',
                 'https://cbu.uz',
+                'https://api.anthropic.com',
+                'https://generativelanguage.googleapis.com',
+                'https://api.x.ai',
+                'https://api.openai.com',
             ],
             fontSrc: ["'self'", 'data:'],
             objectSrc: ["'none'"],
@@ -111,7 +122,7 @@ const csrfProtection = csrf({
     }
 });
 
-// 🛡️ Rate Limit
+// Rate Limit
 const csrfLimiter = rateLimit({
     windowMs: 10 * 60 * 1000,
     max: 100,
@@ -162,6 +173,7 @@ const printerRoutes = require('./routes/printerRoutes')(io);
 const userRoutes = require('./routes/userRoutes')(io);
 const userChatRoutes = require('./routes/userChatRoutes')(csrfProtection, io);
 const pushRoutes = require('./routes/pushRoutes');
+const subscriptionRoutes = require('./routes/subscriptionRoutes');
 
 // API Endpointlarni bog'lash
 app.use('/metrics', metricsRouter);
@@ -181,6 +193,7 @@ app.use('/api', scanProductsRouter);
 app.use('/api', debtsRoutes);
 app.use('/api', salesRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/subscription', subscriptionRoutes);
 // ====================================
 // 🌐 CATCH-ALL (SPA SUPPORT)
 // ====================================

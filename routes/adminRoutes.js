@@ -1,9 +1,11 @@
 const express = require('express');
 const verifyToken = require('../middleware/verifyToken');
 const { isAdmin } = require('../controllers/authController');
+const { cacheMiddleware, invalidateCache, invalidateUserCache, CACHE_TTL } = require('../middleware/redisCache');
 
 const User = require('../models/User');
 const UserSession = require('../models/UserSession');
+const { sendToUser } = require('../socket');
 
 module.exports = (csrfProtection) => {
   const router = express.Router();
@@ -38,6 +40,7 @@ router.get('/users', verifyToken, isAdmin, async (req, res) => {
         name: user.name || null,
         email: user.email || null,
         blocked: user.blocked || false,
+        subscription: user.subscription || { plan: 'free', isTrial: false },
         currentDevice: {
           deviceId: activeDevice.deviceId || "—",
           deviceType: activeDevice.deviceType || "—",
@@ -171,6 +174,64 @@ router.get('/stats', verifyToken, isAdmin, async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ success: false, message: "Xato" });
+  }
+});
+
+/**
+ * @route   POST /api/admin/change-user-plan
+ * @desc    Admin foydalanuvchining tarif rejasini o'zgartiradi (real-time)
+ */
+router.post('/change-user-plan', verifyToken, isAdmin, csrfProtection, async (req, res) => {
+  const { userId, plan } = req.body;
+
+  if (!userId || !plan) {
+    return res.status(400).json({ 
+      success: false, 
+      message: "User ID va Plan majburiy" 
+    });
+  }
+
+  if (!['free', 'basic', 'pro'].includes(plan)) {
+    return res.status(400).json({ 
+      success: false, 
+      message: "Noto'g'ri plan qiymati" 
+    });
+  }
+
+  try {
+    const user = await User.findById(userId).select('-password -googleAuthSecret');
+
+    if (!user) {
+      return res.status(404).json({ 
+        success: false, 
+        message: "Foydalanuvchi topilmadi" 
+      });
+    }
+
+    // 1. User subscription'ini yangilash
+    user.subscription.plan = plan;
+    user.subscription.isTrial = false;
+    await user.save();
+
+    // 2. Cache invalidatsiya - eski cache'larni tozalash
+    await invalidateCache(`GET:/api/subscription/current`);
+    await invalidateUserCache(user.login);
+
+    // 3. Real-time yangilash: foydalanuvchining barcha qurilmalariga xabar yuborish
+    sendToUser(user.login, 'subscriptionChanged', { subscription: user.subscription });
+
+    res.json({
+      success: true,
+      message: `${user.login} foydalanuvchining tarif rejasi ${plan} ga o'zgartirildi`,
+      user: {
+        _id: user._id,
+        login: user.login,
+        subscription: user.subscription
+      }
+    });
+  } catch (err) {
+    console.error("[admin/change-user-plan] Xato:", err);
+    res.status(500).json({ success: false, message: "Server xatosi" });
   }
 });
 

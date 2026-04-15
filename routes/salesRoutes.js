@@ -1,6 +1,7 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const verifyToken = require('../middleware/verifyToken');
+const { cacheMiddleware, invalidateUserCache, CACHE_TTL } = require('../middleware/redisCache');
 const AuditService = require('../services/auditService');
 const User = require('../models/User');
 const ShopType = require('../models/ShopType');
@@ -187,8 +188,8 @@ router.post('/sell-product/:login', verifyToken, csrfProtection, async (req, res
   }
 });
 
-// ✅ Sotuvlarni yuklash (Lifetime archive dan)
-router.get('/sales/:login', verifyToken, async (req, res) => {
+// ✅ Sotuvlarni yuklash (Lifetime archive dan) - 3 daqiqa cache
+router.get('/sales/:login', verifyToken, cacheMiddleware(CACHE_TTL.MEDIUM), async (req, res) => {
   try {
     const { login } = req.params;
     
@@ -204,8 +205,8 @@ router.get('/sales/:login', verifyToken, async (req, res) => {
   }
 });
 
-// 🔹 Sotilganlar (Sotilgan.tsx) uchun — bucketlardan o'qish
-router.get('/sold-buckets/:login', verifyToken, async (req, res) => {
+// 🔹 Sotilganlar (Sotilgan.tsx) uchun — bucketlardan o'qish - 3 daqiqa cache
+router.get('/sold-buckets/:login', verifyToken, cacheMiddleware(CACHE_TTL.MEDIUM), async (req, res) => {
   try {
     const { login } = req.params;
     const safeLogin = String(login).trim().toLowerCase();

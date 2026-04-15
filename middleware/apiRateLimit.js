@@ -5,8 +5,8 @@
 const rateLimit = require('express-rate-limit');
 
 const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 daqiqa
-  max: 300,                 // IP uchun 15 daqiqada maksimum 300 so'rov
+  windowMs: 1 * 60 * 1000, // 1 daqiqa
+  max: 1000,                 // IP uchun 1 daqiqada maksimum 1000 so'rov
   message: {
     success: false,
     message: "Juda ko'p so'rov. Iltimos, biroz kuting."

@@ -1,12 +1,13 @@
 const express = require("express");
 const verifyToken = require('../middleware/verifyToken');
+const { cacheMiddleware, invalidateUserCache, CACHE_TTL } = require('../middleware/redisCache');
 const Debt = require('../models/Debt');
 
 module.exports = (csrfProtection) => {
   const router = express.Router();
 
-// Barcha qarzlarni olish
-router.get("/debts/:login", verifyToken, async (req, res) => {
+// Barcha qarzlarni olish - 3 daqiqa cache
+router.get("/debts/:login", verifyToken, cacheMiddleware(CACHE_TTL.MEDIUM), async (req, res) => {
   try {
     const { login } = req.params;
     

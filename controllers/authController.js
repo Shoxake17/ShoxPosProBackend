@@ -15,7 +15,7 @@ const { v4: uuidv4 } = require('uuid');
 const config = require('../config');
 
 // ====================================================================
-// 🛡️ INPUT SANITIZER — NoSQL Injection va XSS himoyasi
+// INPUT SANITIZER — NoSQL Injection va XSS himoyasi
 // ====================================================================
 function sanitizeString(value, fieldName = 'field') {
   if (value === null || value === undefined) {
@@ -83,7 +83,7 @@ function createTokens(user, deviceId = null) {
   const accessToken = jwt.sign(
     payload,
     process.env.JWT_SECRET,
-    { expiresIn: process.env.JWT_EXPIRES_IN || '15m' }
+    { expiresIn: process.env.JWT_EXPIRES_IN || '1h' }
   );
 
   const refreshTokenId = uuidv4();
@@ -195,7 +195,7 @@ exports.login = async (req, res) => {
       AuditService.logUserAction({ login: user.login, action: 'LOGIN', status: 'SUCCESS' })
     ]);
 
-    res.cookie('accessToken', accessToken, { ...cookieOptions, maxAge: 15 * 60 * 1000 });
+    res.cookie('accessToken', accessToken, { ...cookieOptions, maxAge: 60 * 60 * 1000 });
     res.cookie('refreshToken', refreshToken, { ...cookieOptions, maxAge: 7 * 24 * 60 * 60 * 1000 });
 
     // Effektif kategoriyalarni aniqlash
@@ -215,7 +215,8 @@ exports.login = async (req, res) => {
         name: user.name,
         shopName: user.shopName,
         shopType: user.shopType,
-        shopCategories: effectiveCategories
+        shopCategories: effectiveCategories,
+        subscription: user.subscription
       }
     });
   } catch (err) {
@@ -241,7 +242,7 @@ exports.refresh = async (req, res) => {
     const isValid = session?.refreshTokens?.some(rt => rt.token === oldRefreshToken);
 
     if (!isValid) {
-      // 🛡️ REUSE DETECTION: Token o'g'irlangan bo'lishi mumkin!
+      //  REUSE DETECTION: Token o'g'irlangan bo'lishi mumkin!
       await UserSessionService.clearAllSessions(user._id);
       return res.status(403).json({ message: "Xavfsizlik xatosi: Qayta login qiling" });
     }
@@ -258,7 +259,7 @@ exports.refresh = async (req, res) => {
       newToken: { tokenId: refreshTokenId, token: refreshToken, createdAt: new Date() }
     });
 
-    res.cookie('accessToken', accessToken, { ...cookieOptions, maxAge: 15 * 60 * 1000 });
+    res.cookie('accessToken', accessToken, { ...cookieOptions, maxAge: 60 * 60 * 1000 });
     res.cookie('refreshToken', refreshToken, { ...cookieOptions, maxAge: 7 * 24 * 60 * 60 * 1000 });
 
     return res.json({ success: true });
@@ -393,7 +394,7 @@ exports.register = async (req, res) => {
     const shopName = sanitizeString(req.body.shopName, 'shopName');
     const shopType  = sanitizeString(req.body.shopType, 'shopType');
     const shopCategories = req.body.shopCategories || [];
-    // 🛡️ Admin faqat bitta bo'lishi kerak. Yangi qo'shiladiganlar faqat 'cashier' bo'ladi.
+    //  Admin faqat bitta bo'lishi kerak. Yangi qo'shiladiganlar faqat 'cashier' bo'ladi.
     const role     = 'cashier';
 
     if (password.length < 8) return res.status(400).json({ message: "Parol 8 tadan ko'p bo'lsin" });
@@ -401,7 +402,24 @@ exports.register = async (req, res) => {
     const exists = await User.findOne({ login: { $eq: login } });
     if (exists) return res.status(409).json({ message: "Login band" });
 
-    const newUser = new User({ login, password, role, shopName, shopType, shopCategories });
+    // 7 kunlik bepul pro rejasi
+    const trialEndDate = new Date();
+    trialEndDate.setDate(trialEndDate.getDate() + 7);
+
+    const newUser = new User({ 
+      login, 
+      password, 
+      role, 
+      shopName, 
+      shopType, 
+      shopCategories,
+      subscription: {
+        plan: 'pro',
+        trialEndDate,
+        isTrial: true,
+        startDate: new Date()
+      }
+    });
     await newUser.save();
     if (shopCategories.length > 0) {
       await ShopType.findOneAndUpdate(
@@ -412,7 +430,14 @@ exports.register = async (req, res) => {
     }
     await AuditService.logUserAction({ login, action: 'REGISTER', status: 'SUCCESS' });
 
-    return res.status(201).json({ success: true, user: { login, role } });
+    return res.status(201).json({ 
+      success: true, 
+      user: { 
+        login, 
+        role,
+        subscription: newUser.subscription
+      } 
+    });
   } catch (err) {
     return res.status(500).json({ message: "Server xatosi" });
   }
@@ -528,7 +553,7 @@ exports.logout = async (req, res) => {
 };
 
 // ====================================================================
-// 🛡️ ADMIN OPS
+// ADMIN OPS
 // ====================================================================
 exports.isAdmin = (req, res, next) => {
   if (req.user.role !== 'admin') return res.status(403).json({ message: "Admin emas" });
@@ -679,17 +704,39 @@ exports.getMe = async (req, res) => {
       }
     }
 
+    // Tekshiramiz: trial muddati tugaganmi?
+    let currentUser = user.toObject();
+    if (currentUser.subscription?.isTrial && currentUser.subscription?.trialEndDate) {
+      const now = new Date();
+      if (now > new Date(currentUser.subscription.trialEndDate)) {
+        // Trial tugagan, free rejaga o'tkazamiz
+        currentUser.subscription.plan = 'free';
+        currentUser.subscription.isTrial = false;
+        // DB'ga saqlaymiz
+        await User.updateOne(
+          { _id: user._id },
+          {
+            $set: {
+              'subscription.plan': 'free',
+              'subscription.isTrial': false
+            }
+          }
+        );
+      }
+    }
+
     res.status(200).json({
       success: true,
       user: {
-        id: user._id,
-        login: user.login,
-        role: user.role,
-        name: user.name,
-        shopName: user.shopName,
-        shopType: user.shopType,
+        id: currentUser._id,
+        login: currentUser.login,
+        role: currentUser.role,
+        name: currentUser.name,
+        shopName: currentUser.shopName,
+        shopType: currentUser.shopType,
         shopCategories: effectiveCategories,
-        activeDevice: req.user.deviceId 
+        activeDevice: req.user.deviceId,
+        subscription: currentUser.subscription
       }
     });
   } catch (err) {
@@ -701,7 +748,7 @@ exports.getShopTypes = async (req, res) => {
   try {
     let types = await ShopType.find({});
     
-    // 🛡️ SEED & FIX: Barcha so'ralgan do'kon turlari va default kategoriyalar
+    //  SEED & FIX: Barcha so'ralgan do'kon turlari va default kategoriyalar
     const initialTypes = [
       { 
         value: "food", label: "Oziq-ovqat va Supermarketlar", icon: "🛒",

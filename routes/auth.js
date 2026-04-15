@@ -13,6 +13,7 @@ const express = require('express');
 const authController = require('../controllers/authController');
 const User = require('../models/User');
 const verifyToken = require('../middleware/verifyToken');
+const { cacheMiddleware, invalidateUserCache, CACHE_TTL } = require('../middleware/redisCache');
 const loginLimiter = require('../middleware/rateLimit');
 const { loginValidation, registerValidation, handleValidationErrors } = require('../middleware/validateAuth');
 
@@ -272,7 +273,7 @@ module.exports = (csrfProtection) => {
    * @description Joriy sessiyani tekshirish
    * @access Protected
    */
-  router.get('/verify-session', verifyToken, (req, res) => {
+  router.get('/verify-session', verifyToken, cacheMiddleware(CACHE_TTL.MEDIUM), (req, res) => {
     try {
       res.json({
         success: true,
@@ -295,7 +296,7 @@ module.exports = (csrfProtection) => {
 
   
 
-  router.get('/me', verifyToken, authController.getMe);
+  router.get('/me', verifyToken, cacheMiddleware(CACHE_TTL.MEDIUM), authController.getMe);
   
   // ====================================
   // 👤 USER INFO ENDPOINTS

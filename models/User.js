@@ -20,6 +20,16 @@ const userSchema = new mongoose.Schema({
     enum: ['admin', 'cashier'], 
     default: 'cashier' 
   },
+  subscription: {
+    plan: { 
+      type: String, 
+      enum: ['free', 'basic', 'pro'], 
+      default: 'pro' 
+    },
+    trialEndDate: { type: Date },
+    isTrial: { type: Boolean, default: true },
+    startDate: { type: Date, default: Date.now }
+  },
   shopName: {
     type: String,
     trim: true,

@@ -8,13 +8,14 @@ const fetch = require("node-fetch").default;
 const { escapeRegex, sanitizeString } = require("../utils/escapeRegex");
 const verifyToken = require("../middleware/verifyToken");
 const AuditService = require("../services/auditService");
+const { cacheMiddleware, invalidateUserCache, CACHE_TTL } = require("../middleware/redisCache");
 
 module.exports = (csrfProtection) => {
   const router = express.Router();
 
-  // 1. Qidiruv (Umumiy yoki Foydalanuvchi mahsulotlari)
+  // 1. Qidiruv (Umumiy yoki Foydalanuvchi mahsulotlari) - 30 soniya cache
   // MUHIM: Bu route "/" dan yuqorida bo'lishi kerak
-  router.get("/search", async (req, res) => {
+  router.get("/search", cacheMiddleware(CACHE_TTL.SHORT), async (req, res) => {
     try {
       const { q = "", category = "", login } = req.query;
 
@@ -64,9 +65,9 @@ module.exports = (csrfProtection) => {
     }
   });
 
-  // 2. Umumiy mahsulotlar soni
+  // 2. Umumiy mahsulotlar soni - 10 daqiqa cache
   // MUHIM: Bu route "/" dan yuqorida bo'lishi kerak
-  router.get("/count", async (req, res) => {
+  router.get("/count", cacheMiddleware(CACHE_TTL.LONG), async (req, res) => {
     try {
       const count = await ProductBase.countDocuments();
       res.json({ count });
@@ -101,8 +102,8 @@ module.exports = (csrfProtection) => {
     }
   });
 
-  // 4. Foydalanuvchi mahsulotlarini olish (Shared products dan)
-  router.get("/user-products/:login", verifyToken, async (req, res) => {
+  // 4. Foydalanuvchi mahsulotlarini olish (Shared products dan) - 3 daqiqa cache
+  router.get("/user-products/:login", verifyToken, cacheMiddleware(CACHE_TTL.MEDIUM), async (req, res) => {
     try {
       const { login } = req.params;
       const safeLogin = String(login || '').trim().toLowerCase();
@@ -182,6 +183,9 @@ module.exports = (csrfProtection) => {
         }
       }
 
+      // 🗑️ Cache invalidatsiya - mahsulot qo'shilganda eski cache'larni tozalash
+      await invalidateUserCache(safeLogin);
+      
       res.json({ message: "Mahsulot qo'shildi", product: updated });
       await AuditService.logUserAction({
         login: req.user.login,
