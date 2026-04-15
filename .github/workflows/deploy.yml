@@ -115,6 +115,7 @@ jobs:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.OWASP_ZAP_SSH_KEY }}
+          port: ${{ secrets.SSH_PORT }}
           script: |
             cd ~/shoxpospro
             docker login ghcr.io -u ${{ github.actor }} -p ${{ secrets.GHCR_PAT }}
