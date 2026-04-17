@@ -390,6 +390,7 @@ router.post('/ask-shoxai', verifyToken, csrfProtection, async (req, res) => {
 
   // 🛡️ A01: Broken Access Control
   const safeLogin = String(login).trim().toLowerCase();
+  console.log("🔑 [ShoxAI] req.user.login:", req.user.login, "vs safeLogin:", safeLogin);
   if (req.user.login !== safeLogin && req.user.role !== 'admin') {
     return res.status(403).json({ error: "Ruxsat etilmagan!" });
   }

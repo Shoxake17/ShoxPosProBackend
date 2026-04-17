@@ -1,11 +1,5 @@
 // models/UserChatHistory.js
 const mongoose = require('mongoose');
-
-/**
- * Foydalanuvchilar orasidagi Chat tarixi uchun Bucket Pattern modeli.
- * participants: [login1, login2] (alifbo tartibida saralangan)
- * roomId: "login1_login2" ko'rinishida (alifbo tartibida)
- */
 const UserChatHistorySchema = new mongoose.Schema({
   roomId: { 
     type: String, 

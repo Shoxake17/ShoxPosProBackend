@@ -2,16 +2,12 @@
  * @file routes/auth.js
  * @description Autentifikatsiya, foydalanuvchi boshqaruvi va admin RBAC endpointlari
  * @version 2.2.0 - CSRF INSTANCE MUAMMOSI TUZATILDI
- *
- * ✅ FIX: Bu fayl endi csrfProtection ni o'zi yaratmaydi.
- *         server.js dan bitta shared instance qabul qiladi.
- *         Ikki xil instance bo'lsa cookie'dagi token bilan
- *         header'dagi token mos kelmay 403 xatosi beradi.
  */
 
 const express = require('express');
 const authController = require('../controllers/authController');
 const User = require('../models/User');
+const ShopType = require('../models/ShopType');
 const verifyToken = require('../middleware/verifyToken');
 const { cacheMiddleware, invalidateUserCache, CACHE_TTL } = require('../middleware/redisCache');
 const loginLimiter = require('../middleware/rateLimit');
@@ -62,7 +58,7 @@ module.exports = (csrfProtection) => {
         });
       }
 
-      // 3. authController.login'ni chaqirish (parol tekshiruvi va boshqalar)
+      // 3. authController.loginni chaqirish (parol tekshiruvi va boshqalar)
       await authController.login(req, res);
 
     } catch (error) {
@@ -85,7 +81,7 @@ module.exports = (csrfProtection) => {
     csrfProtection, 
     registerValidation, 
     handleValidationErrors, 
-    authController.register // <-- Bu controller endi shopName va kategoriyalarni saqlaydi
+    authController.register
   );
 
   router.post(
@@ -273,15 +269,29 @@ module.exports = (csrfProtection) => {
    * @description Joriy sessiyani tekshirish
    * @access Protected
    */
-  router.get('/verify-session', verifyToken, cacheMiddleware(CACHE_TTL.MEDIUM), (req, res) => {
+  router.get('/verify-session', verifyToken, async (req, res) => {
     try {
+      const user = await User.findOne({ login: req.user.login });
+      
+      let effectiveCategories = user?.shopCategories || [];
+      if (effectiveCategories.length === 0 && user?.shopType) {
+        const typeData = await ShopType.findOne({ value: user.shopType });
+        if (typeData) {
+          effectiveCategories = typeData.categories;
+        }
+      }
+      
       res.json({
         success: true,
         valid: true,
         user: {
-          id: req.user.id,
+          id: user?._id || req.user.id,
           login: req.user.login,
-          role: req.user.role
+          role: req.user.role,
+          shopName: user?.shopName,
+          shopType: user?.shopType,
+          shopCategories: effectiveCategories,
+          subscription: user?.subscription
         }
       });
     } catch (error) {

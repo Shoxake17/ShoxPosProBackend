@@ -17,8 +17,7 @@ const config = require('./config');
 const connectDB = require('./config/db');
 const { initIO } = require('./socket');
 
-// 🚀 Redis Cache - Professional caching tizimi
-const redisClient = require('./config/redis');
+
 
 // Middlewarelar
 const verifyToken = require('./middleware/verifyToken');
@@ -161,6 +160,7 @@ const biometricRouter = require('./routes/biometricRoutes')(csrfProtection);
 const authenticatorRouter = require('./routes/authenticatorRoutes')(csrfProtection);
 const cashbackProxy = require('./routes/cashbackProxy')(csrfProtection);
 const adminRoutes = require('./routes/adminRoutes')(csrfProtection);
+const pharmacyRoutes = require('./routes/pharmacyRoutes')(csrfProtection);
 const { router: metricsRouter } = require('./routes/metrics');
 // Socket ulanishi talab qiladigan routerlar
 const io = socketIo(server, {
@@ -193,6 +193,7 @@ app.use('/api', scanProductsRouter);
 app.use('/api', debtsRoutes);
 app.use('/api', salesRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/pharmacy', pharmacyRoutes);
 app.use('/api/subscription', subscriptionRoutes);
 // ====================================
 // 🌐 CATCH-ALL (SPA SUPPORT)

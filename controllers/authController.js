@@ -775,7 +775,7 @@ exports.getShopTypes = async (req, res) => {
         categories: ["Atirlar", "Makiyaj", "Teri parvarishi", "Gigiyena vositalari"]
       },
       { 
-        value: "pharmacy", label: "Dorixonalar", icon: "💊",
+        value: "dorixona", label: "Dorixonalar", icon: "💊",
         categories: ["Dorilar", "Tibbiy jihozlar", "Vitaminlar", "Gigiyena vositalari"]
       },
     ];
