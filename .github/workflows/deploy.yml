@@ -120,6 +120,7 @@ jobs:
             -Dsonar.host.url=https://sonarcloud.io
 
   # 4. Build va Push (Faqat SAST bosqichlari o'tsa)
+  # 4. Build va Push (Faqat SAST bosqichlari o'tsa)
   build-and-push:
     name: Build and Push Docker Image
     runs-on: ubuntu-latest
@@ -134,6 +135,29 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GHCR_PAT }}
+
+      # 1. Build (Lokal skanerlash uchun imajni tayyorlaymiz)
+      - name: Build Docker Image locally
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          load: true # Imajni Trivy ko'rishi uchun lokal yuklaydi
+          tags: ghcr.io/shoxake17/shoxposprobackend:latest
+          no-cache: true
+
+      # 2. Scan (Trivy ishga tushadi)
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'ghcr.io/shoxake17/shoxposprobackend:latest'
+          format: 'table'
+          exit-code: '1' 
+          ignore-unfixed: true
+          severity: 'CRITICAL,HIGH'
+
+      # 3. Push (Faqat skanerlashdan o'tsagina GHCRga yuboradi)
+      - name: Push Docker Image to GHCR
+        run: docker push ghcr.io/shoxake17/shoxposprobackend:latest
 
       - name: Build and Push
         uses: docker/build-push-action@v5
