@@ -159,14 +159,6 @@ jobs:
       - name: Push Docker Image to GHCR
         run: docker push ghcr.io/shoxake17/shoxposprobackend:latest
 
-      - name: Build and Push
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          tags: ghcr.io/shoxake17/shoxposprobackend:latest
-          no-cache: true
-
   # 5. Deploy
   deploy:
     name: Deploy to VPS
@@ -192,7 +184,6 @@ jobs:
     name: OWASP ZAP Security Scan
     runs-on: ubuntu-latest
     needs: deploy
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -209,3 +200,24 @@ jobs:
         with:
           name: zap-backend-reports
           path: zap_report.*
+
+  nuclei_scan:
+    name: DAST - Nuclei Scan
+    runs-on: ubuntu-latest
+    needs: deploy
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Nuclei - Vulnerability Scan
+        uses: projectdiscovery/nuclei-action@main
+        with:
+          target: https://shoxpospro.uz 
+          flags: "-severity critical,high,medium"
+
+      - name: Upload Nuclei Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nuclei-report
+          path: nuclei.log
