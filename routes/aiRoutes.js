@@ -325,63 +325,7 @@ router.post('/ask-groq-ai', verifyToken, csrfProtection, async (req, res) => {
   }
 });
 
-// 📌 OpenAI ChatGPT endpoint
-router.post('/ask-openai', verifyToken, csrfProtection, async (req, res) => {
-  const { question, login, systemOverride, modelId: feModelId } = req.body;
-  if (!question || !login) return res.status(400).json({ error: 'Savol va login kiritilmagan' });
 
-  const safeLogin = String(login).trim().toLowerCase();
-  if (req.user.login !== safeLogin && req.user.role !== 'admin') {
-    return res.status(403).json({ error: "Ruxsat etilmagan!" });
-  }
-
-  try {
-    const historyModelId = feModelId || 'gpt-4o-mini';
-    // User xabarini saqlash
-    await saveChatMessage(safeLogin, 'user', question, historyModelId);
-
-    let systemPrompt = systemOverride || '';
-    if (!systemOverride && login && needsData(question)) {
-      const context = await buildFullContext(login);
-      systemPrompt = `Men Shoxrux tomonidan yaratilgan ShoxAi modeliman. Do'kon boshqaruv tizimining professional AI yordamchisisiman.\n\n${context}`;
-    } else if (!systemOverride) {
-      systemPrompt = 'Men Shoxrux tomonidan yaratilgan ShoxAi modeliman. Do\'kon boshqaruv tizimining professional AI yordamchisisiman.';
-    }
-
-    console.log(`[OpenAI] Calling OpenAI API...`);
-    const response = await axios.post("https://api.openai.com/v1/chat/completions", {
-      model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: question }
-      ]
-    }, {
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`
-      },
-      timeout: 30000
-    });
-
-    const answer = response.data.choices?.[0]?.message?.content || "❌ Javob olinmadi";
-
-    // AI javobini saqlash
-    await saveChatMessage(safeLogin, 'assistant', answer, historyModelId);
-
-    res.json({ answer });
-  } catch (error) {
-    let errorMsg = "OpenAI bilan aloqa xatosi";
-    if (error.response) {
-      errorMsg = error.response.data?.error?.message || `OpenAI API Error: ${error.response.status}`;
-    } else if (error.request) {
-      errorMsg = "OpenAI serveridan javob olinmadi";
-    } else {
-      errorMsg = error.message;
-    }
-    console.error("❌ OpenAI xatosi:", errorMsg);
-    res.status(500).json({ error: errorMsg });
-  }
-});
 
 // 📌 ShoxAI endpoint 
 router.post('/ask-shoxai', verifyToken, csrfProtection, async (req, res) => {
@@ -548,10 +492,6 @@ router.post('/shoxai-lite', verifyToken, csrfProtection, async (req, res) => {
     res.status(500).json({ error: errorMsg });
   }
 });
-
-
-
-
 
 // 📌 OpenRouter AI endpoint
 router.post('/ask-openrouter', verifyToken, csrfProtection, async (req, res) => {
