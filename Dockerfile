@@ -7,7 +7,7 @@ WORKDIR /app
 COPY package*.json ./
 
 # Build vositalari tayyor bo'lgani uchun tez va xatosiz o'rnaydi
-RUN npm install --omit=dev
+RUN npm install --only=production --legacy-peer-deps
 
 # Qolgan kodni nusxalash
 COPY . .
