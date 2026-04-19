@@ -1,20 +1,3 @@
-# 1-Bosqich: Build
-FROM node:22-slim AS builder
-
-WORKDIR /app
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 \
-    make \
-    g++ \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY package*.json ./
-
-RUN npm install --legacy-peer-deps
-
-COPY . .
-
 # 2-Bosqich: Production
 FROM node:22-slim
 
@@ -22,6 +5,10 @@ WORKDIR /app
 
 RUN apt-get update && apt-get upgrade -y && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# npm ichidagi zaif picomatch ni yangilash
+RUN cd /usr/local/lib/node_modules/npm && \
+    npm install picomatch@4.0.4 --no-save
 
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app ./
