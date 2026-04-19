@@ -1,9 +1,8 @@
-# 1-Bosqich: Build (Kutubxonalarni o'rnatish)
-FROM node:20-slim AS builder
+# 1-Bosqich: Build
+FROM node:22-slim AS builder
 
 WORKDIR /app
 
-# Build uchun kerak bo'ladigan minimal tizim paketlarini yangilash
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     make \
@@ -12,25 +11,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY package*.json ./
 
-# Barcha kutubxonalarni o'rnatish (shu jumladan devDependencies build uchun)
-RUN npm install --legacy-peer-deps
+RUN npm install --legacy-peer-deps && \
+    npm update --legacy-peer-deps
 
 COPY . .
 
-# 2-Bosqich: Production (Faqat kerakli fayllar bilan yengil imidj)
-FROM node:20-slim
+# 2-Bosqich: Production
+FROM node:22-slim
 
 WORKDIR /app
 
-# Tizim xavfsizligi uchun paketlarni yangilab olish (Trivy xatolarini yopadi)
+# Tizim paketlarini yangilash + npm'ni so'nggi versiyaga ko'tarish
 RUN apt-get update && apt-get upgrade -y && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+    apt-get clean && rm -rf /var/lib/apt/lists/* && \
+    npm install -g npm@latest
 
-# Faqat production uchun kerakli kutubxonalarni builder'dan nusxalash
+# Faqat production node_modules
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app ./
 
-# Xavfsizlik uchun: Ilovani root foydalanuvchi nomidan emas, 'node' foydalanuvchisi nomidan ishga tushirish
+# Root bo'lmagan foydalanuvchi
 USER node
 
 EXPOSE 3000
