@@ -1,3 +1,20 @@
+# 1-Bosqich: Build
+FROM node:22-slim AS builder
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    make \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY package*.json ./
+
+RUN npm install --legacy-peer-deps
+
+COPY . .
+
 # 2-Bosqich: Production
 FROM node:22-slim
 
