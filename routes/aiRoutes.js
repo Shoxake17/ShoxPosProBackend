@@ -227,7 +227,7 @@ ${lossProducts.length > 0 ? lossProducts.map(p => `  ${p.name}: sotuv ${p.price}
 ${debtsContext}
 `;
   } catch (err) {
-    console.error('Context yaratishda xato:', err);
+    console.error('Context yaratishda xato:', err.message);
     return 'Ma\'lumotlarni yuklashda xato yuz berdi.';
   }
 }
@@ -254,10 +254,22 @@ router.delete('/ai/history/:login', verifyToken, csrfProtection, async (req, res
   res.json({ success: true, message: "Tarix tozalandi" });
 });
 
-// 📌 Groq AI endpoint
-router.post('/ask-groq-ai', verifyToken, csrfProtection, async (req, res) => {
-  console.log(`[AI] Groq request: ${req.body.login}, model: ${req.body.groqModel}`);
-  const { question, login, groqModel, systemOverride, modelId: feModelId } = req.body;
+// 📌 Hard-coded javoblar funksiyasi (100% ishlashini ta'minlash uchun)
+function getHardCodedAnswer(question, modelName) {
+  const q = question.toLowerCase().trim();
+  if (q.includes('isming') || q.includes('isming nima') || q.includes('sening isming')) {
+    return `Men Shoxrux tomonidan yaratilgan ${modelName} modeliman.`;
+  }
+  if (q.includes('kim yasagan') || q.includes('kim yaratgan') || q.includes('kim tomonidan')) {
+    return 'Men Shoxrux tomonidan yaratilganman.';
+  }
+  return null;
+}
+
+// 📌 Yangi endpointlar uchun umumiy yordamchi funksiyalar
+
+async function handleGroqRequest(req, res, modelName, groqModelId) {
+  const { question, login, systemOverride, modelId: feModelId } = req.body;
   if (!question || !login) return res.status(400).json({ error: 'Savol va login kiritilmagan' });
 
   const safeLogin = String(login).trim().toLowerCase();
@@ -266,17 +278,21 @@ router.post('/ask-groq-ai', verifyToken, csrfProtection, async (req, res) => {
   }
 
   try {
+    const historyModelId = feModelId || groqModelId;
+    await saveChatMessage(safeLogin, 'user', question, historyModelId);
+
+    const hardAnswer = getHardCodedAnswer(question, modelName);
+    if (hardAnswer) {
+      await saveChatMessage(safeLogin, 'assistant', hardAnswer, historyModelId);
+      return res.json({ answer: hardAnswer });
+    }
+
     if (!process.env.GROQ_API_KEY) {
       console.error("❌ [Groq] API Key topilmadi");
       throw new Error("GROQ_API_KEY topilmadi. Iltimos, server sozlamalarini tekshiring.");
     }
 
-    const groqModelId = groqModel || 'llama-3.3-70b-versatile';
-    const historyModelId = feModelId || groqModelId;
-    console.log(`[Groq] Saving user message...`);
-    await saveChatMessage(safeLogin, 'user', question, historyModelId);
-
-    let systemPrompt = systemOverride || 'Sen do\'kon boshqaruv tizimining AI yordamchisisisan. O\'zbek tilida javob ber.';
+    let systemPrompt = systemOverride || `Sen ${modelName} modelisan. Shoxrux tomonidan yaratilgan. Do'kon boshqaruv tizimining AI yordamchisisisan. O'zbek tilida javob ber.\n\nQOIDALAR:\n1. Ismingni so'rashsa: "Men Shoxrux tomonidan yaratilgan ${modelName} modeliman" deb javob ber.\n2. Kim yasaganini so'rashsa: "Men Shoxrux tomonidan yaratilganman" deb javob ber.\n3. Faqat berilgan ma'lumotlarga asoslan.\n4. Raqamlarni aniq ko'rsat.\n5. Har doim amaliy tavsiyalar ber.\n6. Markdown formatidan foydalan.`;
     if (!systemOverride && login && needsData(question)) {
       console.log(`[Groq] Building context...`);
       const context = await buildFullContext(login);
@@ -305,15 +321,12 @@ router.post('/ask-groq-ai', verifyToken, csrfProtection, async (req, res) => {
   } catch (error) {
     let errorMsg = "Groq bilan aloqa xatosi";
     if (error.response) {
-      // API dan kelgan xato
       errorMsg = error.response.data?.error?.message || `Groq API Error: ${error.response.status}`;
       console.error(`❌ Groq API xatosi (${error.response.status}):`, JSON.stringify(error.response.data));
     } else if (error.request) {
-      // So'rov yuborildi, lekin javob kelmadi
       errorMsg = "Groq serveridan javob olinmadi (Network error)";
       console.error(`❌ Groq Network xatosi:`, error.message);
     } else {
-      // Boshqa xato
       errorMsg = error.message;
       console.error(`❌ Groq Controller xatosi:`, error.message);
     }
@@ -323,192 +336,28 @@ router.post('/ask-groq-ai', verifyToken, csrfProtection, async (req, res) => {
       details: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
-});
+}
 
-
-
-// 📌 ShoxAI endpoint 
-router.post('/ask-shoxai', verifyToken, csrfProtection, async (req, res) => {
+async function handleOpenRouterRequest(req, res, modelName, orModelId) {
   const { question, login, systemOverride, modelId: feModelId } = req.body;
   if (!question || !login) return res.status(400).json({ error: 'Savol va login kiritilmagan' });
 
-  // 🛡️ A01: Broken Access Control
-  const safeLogin = String(login).trim().toLowerCase();
-  console.log("🔑 [ShoxAI] req.user.login:", req.user.login, "vs safeLogin:", safeLogin);
-  if (req.user.login !== safeLogin && req.user.role !== 'admin') {
-    return res.status(403).json({ error: "Ruxsat etilmagan!" });
-  }
-
-  try {
-    const historyModelId = feModelId || 'shox-ai';
-    // User xabarini saqlash
-    await saveChatMessage(safeLogin, 'user', question, historyModelId);
-
-    let systemPrompt = '';
-
-    // Frontend systemOverride yuborilgan bo'lsa (Ai.tsx sahifasi)
-    if (systemOverride) {
-      systemPrompt = systemOverride;
-    } else if (login) {
-      // Avtomatik ma'lumot olish
-      const context = await buildFullContext(login);
-      systemPrompt = `Men Shoxrux tomonidan yaratilgan ShoxAi modeliman. Professional savdo tahlilchisi va biznes maslahatchisisisan. 
-Sening vazifang do'kon ma'lumotlarini real vaqtda tahlil qilib, amaliy maslahatlar berishdir.
-
-QOIDALAR:
-1. Ismingni so'rashsa: "Men Shoxrux tomonidan yaratilgan ShoxAi modeliman" deb javob ber.
-2. Faqat berilgan ma'lumotlarga asoslan
-3. Raqamlarni aniq ko'rsat
-4. Har doim amaliy tavsiyalar ber
-5. O'zbek tilida javob ber
-6. Markdown formatidan foydalan
-
-${context}`;
-    } else {
-      systemPrompt = 'Men Shoxrux tomonidan yaratilgan ShoxAi modeliman. Do\'kon boshqaruv tizimining AI yordamchisisisan. O\'zbek tilida javob ber.';
-    }
-
-    const response = await axios.post("https://api.deepseek.com/v1/chat/completions", {
-      model: "deepseek-chat",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: question }
-      ]
-    }, {
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${process.env.DEEPSEEK_API_KEY}`
-      },
-      timeout: 30000
-    });
-
-    const answer = response.data.choices?.[0]?.message?.content || "❌ Javob olinmadi";
-
-    // AI javobini saqlash
-    await saveChatMessage(safeLogin, 'assistant', answer, historyModelId);
-
-    res.json({ answer });
-  } catch (error) {
-    let errorMsg = "ShoxAi  bilan aloqa xatosi";
-    if (error.response) {
-      errorMsg = error.response.data?.error?.message || `ShoxAi Modelida xatolik: ${error.response.status}`;
-    } else if (error.request) {
-      errorMsg = "ShoxAi serveridan javob olinmadi";
-    } else {
-      errorMsg = error.message;
-    }
-    console.error("❌ ShoxAi xatosi:", errorMsg);
-    res.status(500).json({ error: errorMsg });
-  }
-});
-
-// 📌 ShoxAi-Lite endpoint
-router.post('/shoxai-lite', verifyToken, csrfProtection, async (req, res) => {
-  const { question, login, systemOverride, modelId: feModelId } = req.body;
-  
-  if (!question || !login) {
-    return res.status(400).json({ error: 'Savol va login kiritilmagan' });
-  }
-
-  const safeLogin = String(login).trim().toLowerCase();
-  
-  // 🛡️ Xavfsizlik tekshiruvi
-  if (req.user.login !== safeLogin && req.user.role !== 'admin') {
-    return res.status(403).json({ error: "Ruxsat etilmagan!" });
-  }
-
-  try {
-    // 1. Foydalanuvchi xabarini saqlash (Model ID yangilandi)
-    const historyModelId = feModelId || 'gemini-2.5-flash';
-    await saveChatMessage(safeLogin, 'user', question, historyModelId);
-
-    // 2. Kontekstni tayyorlash
-    let contextText = systemOverride || '';
-    if (!systemOverride && login && needsData(question)) {
-      console.log(`[ShoxAI Lite] Building data context for ${login}...`);
-      contextText = await buildFullContext(login);
-    }
-
-    const systemPrompt = `Men Shoxrux tomonidan yaratilgan ShoxAi-Lite modelisan. Do'kon boshqaruv tizimining professional AI yordamchisisisan. O'zbek tilida javob ber.\n\n${contextText}`;
-
-
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
-
-    const response = await axios.post(url, {
-      contents: [
-        {
-          role: 'user',
-          parts: [{ text: `${systemPrompt}\n\nFoydalanuvchi savoli: ${question}` }]
-        }
-      ],
-      // ✨ Yangi: Javob sifatini nazorat qilish uchun parametrlar
-      generationConfig: {
-        temperature: 0.7,
-        topK: 40,
-        topP: 0.95,
-        maxOutputTokens: 2048,
-      }
-    }, {
-      headers: { "Content-Type": "application/json" },
-      timeout: 30000 // 30 soniya
-    });
-
-    // 4. Javobni qabul qilish
-    const answer = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
-    
-    if (!answer) {
-      throw new Error("ShoxAI Lite modelidan bo'sh javob qaytdi yoki xavfsizlik filtri blokladi.");
-    }
-
-    // 5. AI javobini saqlash
-    await saveChatMessage(safeLogin, 'assistant', answer, historyModelId);
-
-    res.json({ answer });
-
-  } catch (error) {
-    let errorMsg = "ShoxAi Lite tizimida kutilmagan xatolik yuz berdi.";
-    
-    if (error.response) {
-      const status = error.response.status;
-      const remoteError = error.response.data?.error?.message || "";
-      
-      console.error(`❌ ShoxAI Lite API Error [Ushbu modelga hozirda talab yuqori. Talabning keskin o'sishi odatda vaqtinchalik. Iltimos, keyinroq qayta urinib ko'ring.]:`, remoteError);
-
-      if (status === 429) {
-        errorMsg = "ShoxAI Lite limiti tugadi. Iltimos, bir necha daqiqadan so'ng urinib ko'ring.";
-      } else if (status === 404) {
-        errorMsg = "Model topilmadi (ShoxAI Lite). Iltimos, model nomini tekshiring.";
-      } else {
-        errorMsg = `ShoxAI Lite xatosi: ${remoteError || status}`;
-      }
-    } else if (error.request) {
-      console.error("❌ ShoxAI Lite Network Error: Serverdan javob kelmadi.");
-      errorMsg = "Internet aloqasi yoki Google serverlari bilan bog'liq muammo.";
-    } else {
-      console.error("❌ Controller Error:", error.message);
-      errorMsg = error.message;
-    }
-
-    res.status(500).json({ error: errorMsg });
-  }
-});
-
-// 📌 OpenRouter AI endpoint
-router.post('/ask-openrouter', verifyToken, csrfProtection, async (req, res) => {
-  const { question, login, orModel, systemOverride, modelId: feModelId } = req.body;
-  if (!question || !login) return res.status(400).json({ error: 'Savol va login kiritilmagan' });
-
   const safeLogin = String(login).trim().toLowerCase();
   if (req.user.login !== safeLogin && req.user.role !== 'admin') {
     return res.status(403).json({ error: "Ruxsat etilmagan!" });
   }
 
   try {
-    const orModelId = orModel || 'deepseek/deepseek-chat';
     const historyModelId = feModelId || orModelId;
     await saveChatMessage(safeLogin, 'user', question, historyModelId);
 
-    let systemPrompt = systemOverride || 'Sen professional AI yordamchisan. O\'zbek tilida javob ber.';
+    const hardAnswer = getHardCodedAnswer(question, modelName);
+    if (hardAnswer) {
+      await saveChatMessage(safeLogin, 'assistant', hardAnswer, historyModelId);
+      return res.json({ answer: hardAnswer });
+    }
+
+    let systemPrompt = systemOverride || `Sen ${modelName} modelisan. Shoxrux tomonidan yaratilgan. Do'kon boshqaruv tizimining AI yordamchisisisan. O'zbek tilida javob ber.\n\nQOIDALAR:\n1. Ismingni so'rashsa: "Men Shoxrux tomonidan yaratilgan ${modelName} modeliman" deb javob ber.\n2. Kim yasaganini so'rashsa: "Men Shoxrux tomonidan yaratilganman" deb javob ber.\n3. Faqat berilgan ma'lumotlarga asoslan.\n4. Raqamlarni aniq ko'rsat.\n5. Har doim amaliy tavsiyalar ber.\n6. Markdown formatidan foydalan.`;
     if (!systemOverride && login && needsData(question)) {
       const context = await buildFullContext(login);
       systemPrompt += `\n\n${context}`;
@@ -546,9 +395,212 @@ router.post('/ask-openrouter', verifyToken, csrfProtection, async (req, res) => 
     }
     res.status(500).json({ error: errorMsg });
   }
+}
+
+async function handleShoxAiProRequest(req, res) {
+  const { question, login, systemOverride, modelId: feModelId } = req.body;
+  if (!question || !login) return res.status(400).json({ error: 'Savol va login kiritilmagan' });
+
+  const safeLogin = String(login).trim().toLowerCase();
+  console.log("🔑 [ShoxAi Pro] req.user.login:", req.user.login, "vs safeLogin:", safeLogin);
+  if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+    return res.status(403).json({ error: "Ruxsat etilmagan!" });
+  }
+
+  try {
+    const historyModelId = feModelId || 'shox-ai';
+    await saveChatMessage(safeLogin, 'user', question, historyModelId);
+
+    const hardAnswer = getHardCodedAnswer(question, 'ShoxAi Pro');
+    if (hardAnswer) {
+      await saveChatMessage(safeLogin, 'assistant', hardAnswer, historyModelId);
+      return res.json({ answer: hardAnswer });
+    }
+
+    let systemPrompt = '';
+
+    if (systemOverride) {
+      systemPrompt = systemOverride;
+    } else if (login) {
+      const context = await buildFullContext(login);
+      systemPrompt = `Men Shoxrux tomonidan yaratilgan ShoxAi Pro modeliman. Professional savdo tahlilchisi va biznes maslahatchisisisan. 
+Sening vazifang do'kon ma'lumotlarini real vaqtda tahlil qilib, amaliy maslahatlar berishdir.
+
+QOIDALAR:
+1. Ismingni so'rashsa: "Men Shoxrux tomonidan yaratilgan ShoxAi Pro modeliman" deb javob ber.
+2. Kim yasaganini so'rashsa: "Men Shoxrux tomonidan yaratilganman" deb javob ber.
+3. Faqat berilgan ma'lumotlarga asoslan
+4. Raqamlarni aniq ko'rsat
+5. Har doim amaliy tavsiyalar ber
+6. O'zbek tilida javob ber
+7. Markdown formatidan foydalan
+
+${context}`;
+    } else {
+      systemPrompt = 'Men Shoxrux tomonidan yaratilgan ShoxAi Pro modeliman. Do\'kon boshqaruv tizimining AI yordamchisisisan. O\'zbek tilida javob ber.\n\nQOIDALAR:\n1. Ismingni so\'rashsa: "Men Shoxrux tomonidan yaratilgan ShoxAi Pro modeliman" deb javob ber.\n2. Kim yasaganini so\'rashsa: "Men Shoxrux tomonidan yaratilganman" deb javob ber.';
+    }
+
+    const response = await axios.post("https://api.deepseek.com/v1/chat/completions", {
+      model: "deepseek-chat",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: question }
+      ]
+    }, {
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${process.env.DEEPSEEK_API_KEY}`
+      },
+      timeout: 30000
+    });
+
+    const answer = response.data.choices?.[0]?.message?.content || "❌ Javob olinmadi";
+
+    await saveChatMessage(safeLogin, 'assistant', answer, historyModelId);
+
+    res.json({ answer });
+  } catch (error) {
+    let errorMsg = "ShoxAi Pro bilan aloqa xatosi";
+    if (error.response) {
+      errorMsg = error.response.data?.error?.message || `ShoxAi Pro Modelida xatolik: ${error.response.status}`;
+    } else if (error.request) {
+      errorMsg = "ShoxAi Pro serveridan javob olinmadi";
+    } else {
+      errorMsg = error.message;
+    }
+    console.error("❌ ShoxAi Pro xatosi:", errorMsg);
+    res.status(500).json({ error: errorMsg });
+  }
+}
+
+async function handleShoxAiLiteRequest(req, res) {
+  const { question, login, systemOverride, modelId: feModelId } = req.body;
+  
+  if (!question || !login) {
+    return res.status(400).json({ error: 'Savol va login kiritilmagan' });
+  }
+
+  const safeLogin = String(login).trim().toLowerCase();
+  
+  if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+    return res.status(403).json({ error: "Ruxsat etilmagan!" });
+  }
+
+  try {
+    const historyModelId = feModelId || 'gemini-2.5-flash';
+    await saveChatMessage(safeLogin, 'user', question, historyModelId);
+
+    const hardAnswer = getHardCodedAnswer(question, 'ShoxAi Lite');
+    if (hardAnswer) {
+      await saveChatMessage(safeLogin, 'assistant', hardAnswer, historyModelId);
+      return res.json({ answer: hardAnswer });
+    }
+
+    let contextText = systemOverride || '';
+    if (!systemOverride && login && needsData(question)) {
+      console.log(`[Shaddiy Ai Lite] Building data context for ${login}...`);
+      contextText = await buildFullContext(login);
+    }
+
+    const systemPrompt = `Men Shoxrux tomonidan yaratilgan ShoxAi Lite modelisan. Do'kon boshqaruv tizimining professional AI yordamchisisisan. O'zbek tilida javob ber.\n\nQOIDALAR:\n1. Ismingni so'rashsa: "Men Shoxrux tomonidan yaratilgan ShoxAi Lite modeliman" deb javob ber.\n2. Kim yasaganini so'rashsa: "Men Shoxrux tomonidan yaratilganman" deb javob ber.\n3. Faqat berilgan ma'lumotlarga asoslan.\n4. Raqamlarni aniq ko'rsat.\n5. Har doim amaliy tavsiyalar ber.\n6. Markdown formatidan foydalan.\n\n${contextText}`;
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
+
+    const response = await axios.post(url, {
+      contents: [
+        {
+          role: 'user',
+          parts: [{ text: `${systemPrompt}\n\nFoydalanuvchi savoli: ${question}` }]
+        }
+      ],
+      generationConfig: {
+        temperature: 0.7,
+        topK: 40,
+        topP: 0.95,
+        maxOutputTokens: 2048,
+      }
+    }, {
+      headers: { "Content-Type": "application/json" },
+      timeout: 30000
+    });
+
+    const answer = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    
+    if (!answer) {
+      throw new Error("Shaddiy Ai Lite modelidan bo'sh javob qaytdi yoki xavfsizlik filtri blokladi.");
+    }
+
+    await saveChatMessage(safeLogin, 'assistant', answer, historyModelId);
+
+    res.json({ answer });
+
+  } catch (error) {
+    let errorMsg = "Shaddiy Ai Lite tizimida kutilmagan xatolik yuz berdi.";
+    
+    if (error.response) {
+      const status = error.response.status;
+      const remoteError = error.response.data?.error?.message || "";
+      
+      console.error(`❌ Shaddiy Ai Lite API Error:`, remoteError);
+
+      if (status === 429) {
+        errorMsg = "Shaddiy Ai Lite limiti tugadi. Iltimos, bir necha daqiqadan so'ng urinib ko'ring.";
+      } else if (status === 404) {
+        errorMsg = "Model topilmadi (Shaddiy Ai Lite). Iltimos, model nomini tekshiring.";
+      } else {
+        errorMsg = `Shaddiy Ai Lite xatosi: ${remoteError || status}`;
+      }
+    } else if (error.request) {
+      console.error("❌ Shaddiy Ai Lite Network Error: Serverdan javob kelmadi.");
+      errorMsg = "Internet aloqasi yoki Google serverlari bilan bog'liq muammo.";
+    } else {
+      console.error("❌ Controller Error:", error.message);
+      errorMsg = error.message;
+    }
+
+    res.status(500).json({ error: errorMsg });
+  }
+}
+
+// 📌 Barcha yangi endpointlar
+
+// ShoxAi Pro
+router.post('/ask-shoxai', verifyToken, csrfProtection, handleShoxAiProRequest);
+
+// ShoxAi (using Groq llama-3.3-70b-versatile)
+router.post('/shoxai', verifyToken, csrfProtection, (req, res) => {
+  handleGroqRequest(req, res, 'ShoxAi', 'llama-3.3-70b-versatile');
 });
 
-// 📌 Together.ai endpoint
+// ShoxAi Lite
+router.post('/shoxai-lite', verifyToken, csrfProtection, handleShoxAiLiteRequest);
+
+// Shaddiy Ai Pro (using Groq llama-3.1-8b-instant)
+router.post('/shaddiy-ai-pro', verifyToken, csrfProtection, (req, res) => {
+  handleGroqRequest(req, res, 'Shaddiy Ai Pro', 'llama-3.1-8b-instant');
+});
+
+// Shaddiy Ai (using OpenRouter deepseek/deepseek-chat)
+router.post('/shaddiy-ai', verifyToken, csrfProtection, (req, res) => {
+  handleOpenRouterRequest(req, res, 'Shaddiy Ai', 'deepseek/deepseek-chat');
+});
+
+// Shaddiy Ai Lite (using OpenRouter deepseek/deepseek-r1)
+router.post('/shaddiy-ai-lite', verifyToken, csrfProtection, (req, res) => {
+  handleOpenRouterRequest(req, res, 'Shaddiy Ai Lite', 'deepseek/deepseek-r1');
+});
+
+// Eski endpointlar ( backward compatibility uchun )
+router.post('/ask-groq-ai', verifyToken, csrfProtection, (req, res) => {
+  const modelName = req.body.groqModel === 'llama-3.3-70b-versatile' ? 'Shaddiy Ai Pro' : 'Shaddiy Ai';
+  handleGroqRequest(req, res, modelName, req.body.groqModel || 'llama-3.3-70b-versatile');
+});
+
+router.post('/ask-openrouter', verifyToken, csrfProtection, (req, res) => {
+  const modelName = req.body.orModel === 'deepseek/deepseek-r1' ? 'Shaddiy Ai Pro' : 'Shaddiy Ai';
+  handleOpenRouterRequest(req, res, modelName, req.body.orModel || 'deepseek/deepseek-chat');
+});
+
 router.post('/ask-together', verifyToken, csrfProtection, async (req, res) => {
   const { question, login, togetherModel, systemOverride, modelId: feModelId } = req.body;
   if (!question || !login) return res.status(400).json({ error: 'Savol va login kiritilmagan' });
@@ -561,9 +613,17 @@ router.post('/ask-together', verifyToken, csrfProtection, async (req, res) => {
   try {
     const tgModelId = togetherModel || 'meta-llama/Llama-3.3-70B-Instruct-Turbo';
     const historyModelId = feModelId || tgModelId;
+    
+    let modelName = 'Shaddiy Ai';
+    if (historyModelId === 'llama-3.3-together' || tgModelId === 'meta-llama/Llama-3.3-70B-Instruct-Turbo') {
+      modelName = 'Shaddiy Ai Pro';
+    } else if (historyModelId === 'qwen-2.5-together' || tgModelId === 'Qwen/Qwen2.5-72B-Instruct-Turbo') {
+      modelName = 'Shaddiy Ai Lite';
+    }
+    
     await saveChatMessage(safeLogin, 'user', question, historyModelId);
 
-    let systemPrompt = systemOverride || 'Sen professional AI yordamchisan. O\'zbek tilida javob ber.';
+    let systemPrompt = systemOverride || `Sen ${modelName} modelisan. Shoxrux tomonidan yaratilgan. Do'kon boshqaruv tizimining AI yordamchisisisan. O'zbek tilida javob ber.\n\nQOIDALAR:\n1. Ismingni so'rashsa: "Men Shoxrux tomonidan yaratilgan ${modelName} modeliman" deb javob ber.\n2. Kim yasaganini so'rashsa: "Men Shoxrux tomonidan yaratilganman" deb javob ber.\n3. Faqat berilgan ma'lumotlarga asoslan.\n4. Raqamlarni aniq ko'rsat.\n5. Har doim amaliy tavsiyalar ber.\n6. Markdown formatidan foydalan.`;
     if (!systemOverride && login && needsData(question)) {
       const context = await buildFullContext(login);
       systemPrompt += `\n\n${context}`;

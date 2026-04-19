@@ -84,6 +84,7 @@ app.use(helmet({
                 'https://generativelanguage.googleapis.com',
             ],
             fontSrc: ["'self'", 'data:'],
+            workerSrc: ["'self'", 'blob:', 'data:'],
             objectSrc: ["'none'"],
             frameAncestors: ["'none'"],
         },

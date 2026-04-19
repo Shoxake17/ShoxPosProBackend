@@ -57,7 +57,7 @@ module.exports = (csrfProtection) => {
   // ====================================================================
 
   // 0. Umumiy dorixona bazasini soni olish
-  router.get("/pharm-base/count", async (req, res) => {
+  router.get("/pharm-base/count", verifyToken, async (req, res) => {
     try {
       const count = await PharmBase.countDocuments();
       res.json({ count });
@@ -68,7 +68,7 @@ module.exports = (csrfProtection) => {
   });
 
   // 1. Dorilarni qidirish (Umumiy yoki Foydalanuvchi dorilar)
-  router.get("/search", cacheMiddleware(CACHE_TTL.SHORT), async (req, res) => {
+  router.get("/search", verifyToken, cacheMiddleware(CACHE_TTL.SHORT), async (req, res) => {
     try {
       const { q = "", category = "", login } = req.query;
       let filter = {};
@@ -90,23 +90,20 @@ module.exports = (csrfProtection) => {
         const safeLogin = String(login).trim().toLowerCase();
         const userPharmProducts = await PharmProduct.find({ ...filter, login: safeLogin }).limit(50).sort({ name: 1 });
         
-        // Agar user bazasidan topilmasa, umumiy dorixona bazasidan qidir
-        if (userPharmProducts.length < 5 || (filter.$or && filter.$or.some(f => f.barcode))) {
-          const globalPharm = await PharmBase.find(filter).limit(50).sort({ name: 1 });
+        // HAMISHA umumiy dorixona bazasidan qidir!
+        const globalPharm = await PharmBase.find(filter).limit(50).sort({ name: 1 });
           
-          const combined = [...userPharmProducts];
-          const userBarcodes = new Set(userPharmProducts.map(p => p.barcode));
+        const combined = [...userPharmProducts];
+        const userBarcodes = new Set(userPharmProducts.map(p => p.barcode));
           
-          for (const gp of globalPharm) {
-            if (!userBarcodes.has(gp.barcode)) {
-              const plainGp = gp.toObject();
-              plainGp.isGlobal = true;
-              combined.push(plainGp);
-            }
+        for (const gp of globalPharm) {
+          if (!userBarcodes.has(gp.barcode)) {
+            const plainGp = gp.toObject();
+            plainGp.isGlobal = true;
+            combined.push(plainGp);
           }
-          return res.json(combined.slice(0, 50));
         }
-        return res.json(userPharmProducts);
+        return res.json(combined.slice(0, 50));
       }
 
       // Case: Faqat umumiy bazadan qidiruv

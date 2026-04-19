@@ -15,7 +15,7 @@ module.exports = (csrfProtection) => {
 
   // 1. Qidiruv (Umumiy yoki Foydalanuvchi mahsulotlari) - 30 soniya cache
   // MUHIM: Bu route "/" dan yuqorida bo'lishi kerak
-  router.get("/search", cacheMiddleware(CACHE_TTL.SHORT), async (req, res) => {
+  router.get("/search", verifyToken, cacheMiddleware(CACHE_TTL.SHORT), async (req, res) => {
     try {
       const { q = "", category = "", login } = req.query;
 
@@ -36,23 +36,21 @@ module.exports = (csrfProtection) => {
         const safeLogin = String(login).trim().toLowerCase();
         const userProducts = await Product.find({ ...filter, login: safeLogin }).limit(50).sort({ name: 1 });
         
-        // Agar user bazasidan topilmasa (yoki kam bo'lsa), global bazadan qidir
-        if (userProducts.length < 5 || (filter.$or && filter.$or.some(f => f.barcode))) {
-          const globalProducts = await ProductBase.find(filter).limit(50).sort({ name: 1 });
+        // AGAR USER BAZASIDA TOPILMASA → HAMISHA GLOBAL BAZADAN QIDIR!
+        // Oldingi shart: userProducts.length < 5 → o'chirildi!
+        const globalProducts = await ProductBase.find(filter).limit(50).sort({ name: 1 });
           
-          const combined = [...userProducts];
-          const userBarcodes = new Set(userProducts.map(p => p.barcode));
+        const combined = [...userProducts];
+        const userBarcodes = new Set(userProducts.map(p => p.barcode));
           
-          for (const gp of globalProducts) {
-            if (!userBarcodes.has(gp.barcode)) {
-              const plainGp = gp.toObject();
-              plainGp.isGlobal = true;
-              combined.push(plainGp);
-            }
+        for (const gp of globalProducts) {
+          if (!userBarcodes.has(gp.barcode)) {
+            const plainGp = gp.toObject();
+            plainGp.isGlobal = true;
+            combined.push(plainGp);
           }
-          return res.json(combined.slice(0, 50));
         }
-        return res.json(userProducts);
+        return res.json(combined.slice(0, 50));
       }
 
       // Case 2: Faqat umumiy bazadan qidiruv
@@ -67,7 +65,7 @@ module.exports = (csrfProtection) => {
 
   // 2. Umumiy mahsulotlar soni - 10 daqiqa cache
   // MUHIM: Bu route "/" dan yuqorida bo'lishi kerak
-  router.get("/count", cacheMiddleware(CACHE_TTL.LONG), async (req, res) => {
+  router.get("/count", verifyToken, cacheMiddleware(CACHE_TTL.LONG), async (req, res) => {
     try {
       const count = await ProductBase.countDocuments();
       res.json({ count });
