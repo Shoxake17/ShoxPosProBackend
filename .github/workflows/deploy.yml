@@ -54,9 +54,9 @@ jobs:
       - name: Check for Critical Issues
         run: |
           CRITICAL=$(jq '[.runs[].results[] | select(.level == "error")] | length' semgrep.sarif)
-          echo "🔴 Critical Security Issues: $CRITICAL"
+          echo "Critical Security Issues: $CRITICAL"
           if [ "$CRITICAL" -gt 0 ]; then
-            echo "❌ Kritik zaiflik topildi!"
+            echo "Kritik zaiflik topildi!"
             exit 1
           fi
       - name: Upload Report to GitHub Security
@@ -87,7 +87,7 @@ jobs:
         with:
           args: --severity-threshold=high --package-manager=npm
 
-  # 3. SonarCloud — ✅ OOM 100% hal qilindi
+  # 3. SonarCloud — OOM 100% hal qilindi
   sonarcloud_sast:
     name: SAST - SonarCloud
     runs-on: ubuntu-latest
@@ -98,7 +98,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      # ✅ 1: RAM bo'shatish (~4GB)
+      # RAM bo'shatish (~3-4GB)
       - name: Free up memory
         run: |
           sudo rm -rf /usr/share/dotnet
@@ -108,43 +108,45 @@ jobs:
           sudo apt-get clean
           free -h
 
-      # ✅ 2: Swap fayl qo'shish (4GB qo'shimcha virtual xotira)
+      # Swap 4GB — pierotofy/set-swap-space ishonchli usul
       - name: Add swap space
-        run: |
-          sudo fallocate -l 4G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
-          free -h
+        uses: pierotofy/set-swap-space@master
+        with:
+          swap-size-gb: 4
 
-      # ✅ 3: Scan
+      # sonar-project.properties dinamik yaratish
+      # Bu fayl scanner ga barcha sozlamalarni beradi
+      # Java faqat minimal orchestrator bo'lib qoladi
+      - name: Create sonar-project.properties
+        run: |
+          cat > sonar-project.properties << 'EOF'
+          sonar.organization=shoxake17
+          sonar.projectKey=Shoxake17_ShoxPosProBackend
+          sonar.sources=.
+          sonar.host.url=https://sonarcloud.io
+          sonar.sourceEncoding=UTF-8
+          sonar.qualitygate.wait=false
+          sonar.scm.disabled=false
+          sonar.javascript.node.max_old_space_size=2048
+          sonar.javascript.maxFileSize=1000
+          sonar.exclusions=node_modules/**,dist/**,coverage/**,test/**,scripts/**,public/**,*.lock,package-lock.json,yarn.lock,*.min.js,*.min.css,**/*.map,**/*.snap
+          sonar.cpd.exclusions=**/*
+          sonar.coverage.exclusions=**/*
+          EOF
+
       - name: SonarCloud Scan
         uses: SonarSource/sonarqube-scan-action@v6
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          # ✅ 4: JVM heap 6GB + G1GC + String dedup
+          # Java 3GB + Node.js 2GB = 5GB — 7GB RAM ichida sig'adi
           SONAR_SCANNER_OPTS: >-
-            -Xmx6144m
-            -Xms512m
-            -Xss32m
+            -Xmx3072m
+            -Xms256m
+            -Xss16m
             -XX:+UseG1GC
             -XX:MaxGCPauseMillis=500
             -XX:+UseStringDeduplication
-            -XX:G1HeapRegionSize=16m
-        with:
-          args: >
-            -Dsonar.organization=shoxake17
-            -Dsonar.projectKey=Shoxake17_ShoxPosProBackend
-            -Dsonar.sources=.
-            -Dsonar.host.url=https://sonarcloud.io
-            -Dsonar.sourceEncoding=UTF-8
-            -Dsonar.qualitygate.wait=false
-            -Dsonar.scm.disabled=false
-            -Dsonar.javascript.node.max_old_space_size=3072
-            -Dsonar.javascript.maxFileSize=1000
-            -Dsonar.exclusions=node_modules/**,dist/**,coverage/**,test/**,scripts/**,public/**,*.lock,package-lock.json,yarn.lock,*.min.js,*.min.css,**/*.map
-            -Dsonar.cpd.exclusions=**/*.js,**/*.json
 
   # 4. Build va Push
   build-and-push:
