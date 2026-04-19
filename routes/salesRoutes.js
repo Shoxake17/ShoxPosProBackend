@@ -126,8 +126,7 @@ router.post('/sell-product/:login', verifyToken, csrfProtection, async (req, res
         login: login 
       }).inc();
     }
-
-    // � Sotilganlar (Sotilgan.tsx) uchun: Bucket (gzip) ga saqlash (Shared salesbuckets - 30 days)
+    // 3️⃣ SalesBucket ga yozish (Weekly bucket - Room uchun)
     const now = new Date();
     const dayOfYear = Math.floor((now - new Date(now.getFullYear(), 0, 0)) / (1000 * 60 * 60 * 24));
     const bucketIndex = Math.floor(dayOfYear / 7);
