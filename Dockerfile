@@ -11,8 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY package*.json ./
 
-RUN npm install --legacy-peer-deps && \
-    npm update --legacy-peer-deps
+RUN npm install --legacy-peer-deps
 
 COPY . .
 
@@ -21,16 +20,12 @@ FROM node:22-slim
 
 WORKDIR /app
 
-# Tizim paketlarini yangilash + npm'ni so'nggi versiyaga ko'tarish
 RUN apt-get update && apt-get upgrade -y && \
-    apt-get clean && rm -rf /var/lib/apt/lists/* && \
-    npm install -g npm@latest
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Faqat production node_modules
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app ./
 
-# Root bo'lmagan foydalanuvchi
 USER node
 
 EXPOSE 3000
