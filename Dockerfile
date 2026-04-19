@@ -23,9 +23,11 @@ WORKDIR /app
 RUN apt-get update && apt-get upgrade -y && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# npm ichidagi zaif picomatch ni yangilash
-RUN cd /usr/local/lib/node_modules/npm && \
-    npm install picomatch@4.0.4 --no-save
+# picomatch 4.0.3 → 4.0.4 ga bevosita almashtirish (npm install ishlatmasdan)
+RUN npm pack picomatch@4.0.4 --pack-destination /tmp && \
+    tar -xzf /tmp/picomatch-4.0.4.tgz -C /tmp && \
+    cp -r /tmp/package/. /usr/local/lib/node_modules/npm/node_modules/picomatch/ && \
+    rm -rf /tmp/picomatch-4.0.4.tgz /tmp/package
 
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app ./
