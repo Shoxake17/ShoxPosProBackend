@@ -21,3 +21,6 @@ logs/
 # Tizim fayllari
 .DS_Store
 Thumbs.db
+
+# Telegram session fayllari
+generate-telegram-session.js

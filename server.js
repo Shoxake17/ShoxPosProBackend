@@ -159,6 +159,7 @@ const authenticatorRouter = require('./routes/authenticatorRoutes')(csrfProtecti
 const cashbackProxy = require('./routes/cashbackProxy')(csrfProtection);
 const adminRoutes = require('./routes/adminRoutes')(csrfProtection);
 const pharmacyRoutes = require('./routes/pharmacyRoutes')(csrfProtection);
+const telegramRoutes = require('./routes/telegramRoutes')(csrfProtection);
 const { router: metricsRouter } = require('./routes/metrics');
 // Socket ulanishi talab qiladigan routerlar
 const io = socketIo(server, {
@@ -193,6 +194,7 @@ app.use('/api', salesRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/pharmacy', pharmacyRoutes);
 app.use('/api/subscription', subscriptionRoutes);
+app.use('/api', telegramRoutes);
 // ====================================
 // 🌐 CATCH-ALL (SPA SUPPORT)
 // ====================================

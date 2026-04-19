@@ -126,6 +126,11 @@ const userSchema = new mongoose.Schema({
     unique: true, 
     sparse: true 
   },
+  telegramId: {
+    type: String,
+    trim: true,
+    default: null
+  },
   pushSubscriptions: [{
     type: mongoose.Schema.Types.Mixed,
     default: null
