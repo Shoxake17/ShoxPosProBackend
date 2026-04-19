@@ -16,12 +16,12 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 
+          fetch-depth: 0
 
       - name: Run Gitleaks
         uses: gitleaks/gitleaks-action@v2
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # 1. Semgrep — SAST
   semgrep_sast:
@@ -96,7 +96,7 @@ jobs:
         with:
           args: --severity-threshold=high --package-manager=npm
 
-  # 3. SonarCloud — SAST (Tuzatilgan qism)
+  # 3. SonarCloud — SAST (✅ OOM xatosi to'liq hal qilindi)
   sonarcloud_sast:
     name: SAST - SonarCloud
     runs-on: ubuntu-latest
@@ -105,15 +105,31 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 
+          fetch-depth: 0
 
-      - name: SonarCloud Scans
-        uses: SonarSource/sonarqube-scan-action@v6  # Yangi action-ga o'tildi
+      # ✅ 1-yechim: Keraksiz fayllarni o'chirib xotirani bo'shatish
+      - name: Free up disk and memory
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo apt-get clean
+          df -h
+
+      # ✅ 2-yechim: node_modules ni o'rnatmaslik (faqat scan uchun kerak emas)
+      - name: SonarCloud Scan
+        uses: SonarSource/sonarqube-scan-action@v6
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          # 100% Yechim: Java xotirasini va Stack hajmini oshirish
-          SONAR_SCANNER_OPTS: -Xmx4096m -Xss32m
+          # ✅ 3-yechim: JVM heap + stack + GC tuning
+          SONAR_SCANNER_OPTS: >-
+            -Xmx6144m
+            -Xms256m
+            -Xss32m
+            -XX:+UseG1GC
+            -XX:MaxGCPauseMillis=200
+            -XX:+UseStringDeduplication
         with:
           args: >
             -Dsonar.organization=shoxake17
@@ -122,9 +138,10 @@ jobs:
             -Dsonar.host.url=https://sonarcloud.io
             -Dsonar.sourceEncoding=UTF-8
             -Dsonar.javascript.node.max_old_space_size=4096
-            -Dsonar.exclusions=node_modules/**,dist/**,coverage/**,test/**,scripts/**
-            -Dsonar.cpd.exclusions=**/*.js
-            -Dsonar.js.analyzeOnlyLineOfCode=true
+            -Dsonar.exclusions=node_modules/**,dist/**,coverage/**,test/**,scripts/**,public/**,*.lock,package-lock.json,yarn.lock,*.min.js,*.min.css
+            -Dsonar.cpd.exclusions=**/*.js,**/*.json
+            -Dsonar.scm.disabled=false
+            -Dsonar.qualitygate.wait=false
 
   # 4. Build va Push
   build-and-push:
@@ -146,7 +163,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          load: true 
+          load: true
           tags: ghcr.io/shoxake17/shoxposprobackend:latest
           no-cache: true
 
@@ -155,7 +172,7 @@ jobs:
         with:
           image-ref: 'ghcr.io/shoxake17/shoxposprobackend:latest'
           format: 'table'
-          exit-code: '1' 
+          exit-code: '1'
           ignore-unfixed: true
           severity: 'CRITICAL,HIGH'
 
@@ -182,7 +199,7 @@ jobs:
             docker-compose up -d --no-deps --force-recreate backend
             docker logout ghcr.io
 
-  # 6. DAST
+  # 6. DAST — OWASP ZAP
   security_scan:
     name: OWASP ZAP Security Scan
     runs-on: ubuntu-latest
@@ -190,11 +207,13 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+
       - name: Run ZAP Scan
         run: |
           chmod -R 777 $GITHUB_WORKSPACE
           docker run --rm -v $(pwd):/zap/wrk/:rw zaproxy/zap-stable \
             zap-full-scan.py -t https://shoxpospro.uz -r zap_report.html -J zap_report.json -m 5 || true
+
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         if: always()
@@ -202,6 +221,7 @@ jobs:
           name: zap-backend-reports
           path: zap_report.*
 
+  # 7. Nuclei DAST
   nuclei_scan:
     name: DAST - Nuclei Scan
     runs-on: ubuntu-latest
@@ -209,11 +229,13 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+
       - name: Nuclei - Vulnerability Scan
         uses: projectdiscovery/nuclei-action@main
         with:
-          target: https://shoxpospro.uz 
+          target: https://shoxpospro.uz
           flags: "-severity critical,high,medium"
+
       - name: Upload Nuclei Results
         uses: actions/upload-artifact@v4
         if: always()
