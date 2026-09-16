@@ -199,7 +199,7 @@ app.use('/api', telegramRoutes);
 // 🌐 CATCH-ALL (SPA SUPPORT)
 // ====================================
 // API so'rovlaridan boshqa barcha so'rovlarni React/Vite index.html ga yo'naltirish
-app.get('*', (req, res) => {
+app.get('/{*splat}', (req, res) => {
     if (req.path.startsWith('/api')) {
         return res.status(404).json({ message: 'API endpoint topilmadi' });
     }
