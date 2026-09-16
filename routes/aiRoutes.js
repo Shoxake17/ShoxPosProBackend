@@ -374,7 +374,7 @@ async function handleOpenRouterRequest(req, res, modelName, orModelId) {
       headers: {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
-        "HTTP-Referer": "https://shoxpospro.uz",
+        "HTTP-Referer": "https://pos.ondex.uz",
         "X-Title": "ShoxPosPro"
       },
       timeout: 45000

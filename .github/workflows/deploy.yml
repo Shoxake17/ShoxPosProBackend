@@ -238,7 +238,7 @@ jobs:
         run: |
           chmod -R 777 $GITHUB_WORKSPACE
           docker run --rm -v $(pwd):/zap/wrk/:rw zaproxy/zap-stable \
-            zap-full-scan.py -t https://shoxpospro.uz -r zap_report.html -J zap_report.json -m 5 || true
+            zap-full-scan.py -t https://pos.ondex.uz -r zap_report.html -J zap_report.json -m 5 || true
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         if: always()
@@ -257,7 +257,7 @@ jobs:
       - name: Nuclei - Vulnerability Scan
         uses: projectdiscovery/nuclei-action@main
         with:
-          target: https://shoxpospro.uz
+          target: https://pos.ondex.uz
           flags: "-severity critical,high,medium"
       - name: Upload Nuclei Results
         uses: actions/upload-artifact@v4
