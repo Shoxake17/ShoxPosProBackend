@@ -23,11 +23,14 @@ WORKDIR /app
 RUN apt-get update && apt-get upgrade -y && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# picomatch 4.0.3 → 4.0.4 ga bevosita almashtirish (npm install ishlatmasdan)
-RUN npm pack picomatch@4.0.4 --pack-destination /tmp && \
-    tar -xzf /tmp/picomatch-4.0.4.tgz -C /tmp && \
-    cp -r /tmp/package/. /usr/local/lib/node_modules/npm/node_modules/picomatch/ && \
-    rm -rf /tmp/picomatch-4.0.4.tgz /tmp/package
+# Production konteynerda npm CLI runtime paytida ishlatilmaydi (faqat "node server.js"
+# ishga tushadi), shuning uchun uni butunlay olib tashlaymiz. Bu npm ichiga o'rnatilgan
+# bundled paketlardagi (brace-expansion, ip-address, pacote, sigstore, tar) barcha CVE'larni
+# tuzatish o'rniga muammoni ildizidan yo'q qiladi.
+RUN rm -rf /usr/local/lib/node_modules/npm \
+    /usr/local/bin/npm /usr/local/bin/npx \
+    /usr/local/share/man/man1/npm* /usr/local/share/man/man1/npx* \
+    /usr/local/share/man/man5/*npm* /usr/local/share/man/man7/*npm*
 
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app ./
