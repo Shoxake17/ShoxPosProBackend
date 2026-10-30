@@ -8,11 +8,11 @@ const TokenBlacklistService = require('../services/tokenBlacklistService');
 const ShopType = require('../models/ShopType');
 const { getUserSockets, sendToUser } = require('../socket');
 
-const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const speakeasy = require('speakeasy');
 const { v4: uuidv4 } = require('uuid');
 const config = require('../config');
+const { normalizePhone, identityByUserId } = require('../services/ondexSso');
+const { syncPartnerProfile } = require('../services/partnerProfile');
 
 // ====================================================================
 // INPUT SANITIZER — NoSQL Injection va XSS himoyasi
@@ -77,7 +77,10 @@ function createTokens(user, deviceId = null) {
     id: user._id.toString(),
     login: user.login,
     role: user.role,
-    deviceId
+    deviceId,
+    // Do'kon kategoriyasi (qurt/store/pharmacy) — `services/storeAccess.js`
+    // shu bo'yicha API'ni cheklaydi. Imzolangan, mijoz o'zgartira olmaydi.
+    sc: user.ondexStoreCategory || ''
   };
 
   const accessToken = jwt.sign(
@@ -101,128 +104,73 @@ exports.generateTokens = async (user, deviceId = null) => {
 };
 
 // ====================================================================
-// 🔐 LOGIN
+// 🔐 SESSIYA YARATISH
 // ====================================================================
-exports.login = async (req, res) => {
-  let login, password, googleAuthCode, deviceId, deviceType, deviceOS;
+/**
+ * Foydalanuvchi OnDex orqali TASDIQLANGANDAN KEYIN chaqiriladi
+ * (`routes/ondexAuth.js`). Kimlikni tekshirish bu yerda EMAS: bu funksiya
+ * faqat qurilmani ro'yxatga oladi, tokenlar va cookie'larni beradi.
+ *
+ * Parol, Authenticator va biometrik tekshiruv olib tashlangan: kirish
+ * yagona OnDex akkaunti orqali.
+ *
+ * @returns {Promise<object>} mijozga ko'rsatiladigan foydalanuvchi ma'lumoti
+ */
+exports.establishSession = async (req, res, user, { deviceId, deviceType = 'unknown', deviceOS = 'unknown' }) => {
+  user.loginAttempts = 0;
+  const { accessToken, refreshToken, refreshTokenId } = createTokens(user, deviceId);
 
-  try {
-    login          = sanitizeString(req.body.login, 'login');
-    password       = sanitizeString(req.body.password, 'password');
-    googleAuthCode = req.body.googleAuthCode ? sanitizeString(req.body.googleAuthCode, 'googleAuthCode') : null;
-    deviceId       = sanitizeDeviceId(req.body.deviceId);
-    deviceType     = req.body.deviceType ? sanitizeString(req.body.deviceType, 'deviceType') : 'unknown';
-    deviceOS       = req.body.deviceOS ? sanitizeString(req.body.deviceOS, 'deviceOS') : 'unknown';
-  } catch (err) {
-    if (isDev) {
-      console.warn("⚠️ [Login Validation Error]:", err.message);
-    }
-    return res.status(400).json({ message: err.message });
+  // Qurilmalar ro'yxatini boshqarish (Cleanup + Update)
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  user.devices = (user.devices || []).filter(d => d.isActive || new Date(d.lastLogin) > thirtyDaysAgo);
+
+  const devIdx = user.devices.findIndex(d => d.deviceId === deviceId);
+  const deviceData = {
+    deviceId, deviceType, deviceOS, lastLogin: new Date(),
+    isActive: true, token: accessToken, kickedAt: null
+  };
+
+  if (devIdx > -1) {
+    user.devices[devIdx] = { ...user.devices[devIdx].toObject(), ...deviceData };
+  } else {
+    user.devices.push(deviceData);
   }
 
-  if (!deviceId) {
-    if (isDev) console.warn("⚠️ [Login Error]: deviceId topilmadi", req.body);
-    return res.status(400).json({ message: "deviceId topilmadi" });
+  user.activeDevice = { deviceId, deviceType, deviceOS, lastLogin: new Date() };
+
+  // 🚀 Parallel bajarish — kirish vaqtini tejash uchun
+  await Promise.all([
+    user.save(),
+    UserSessionService.createSession({
+      userId: user._id, deviceId, refreshToken, refreshTokenId, deviceType, deviceOS,
+      ip: req.headers['x-forwarded-for']?.split(',')[0] || req.socket.remoteAddress,
+      userAgent: req.headers['user-agent']
+    }),
+    AuditService.logUserAction({ login: user.login, action: 'LOGIN', status: 'SUCCESS' })
+  ]);
+
+  res.cookie('accessToken', accessToken, { ...cookieOptions, maxAge: 60 * 60 * 1000 });
+  res.cookie('refreshToken', refreshToken, { ...cookieOptions, maxAge: 7 * 24 * 60 * 60 * 1000 });
+
+  // Effektif kategoriyalarni aniqlash
+  let effectiveCategories = user.shopCategories || [];
+  if (effectiveCategories.length === 0 && user.shopType) {
+    const typeData = await ShopType.findOne({ value: user.shopType });
+    if (typeData) {
+      effectiveCategories = typeData.categories;
+    }
   }
 
-  try {
-    const normalizedLogin = login.toLowerCase();
-    const user = await User.findOne({ login: { $eq: normalizedLogin } }).select('+password +googleAuthSecret');
-
-    if (!user) return res.status(404).json({ message: "Foydalanuvchi topilmadi" });
-    if (user.isDeleted) return res.status(403).json({ message: "Hisob o'chirilgan" });
-
-    // Qurilma blokini tekshirish
-    const blockedDevice = user.blockedDevices?.find(d => d.deviceId === deviceId);
-    if (blockedDevice && new Date() < new Date(blockedDevice.lockUntil)) {
-      return res.status(403).json({ message: "Qurilma 30 minutga bloklangan" });
-    }
-
-    const isMatch = await bcrypt.compare(password, user.password || '');
-    if (!isMatch) {
-      user.loginAttempts = (user.loginAttempts || 0) + 1;
-      if (user.loginAttempts >= 5) {
-        user.blockedDevices.push({ deviceId, lockUntil: new Date(Date.now() + 30 * 60 * 1000) });
-        user.loginAttempts = 0;
-      }
-      await user.save();
-      return res.status(401).json({ message: "Parol noto'g'ri" });
-    }
-
-    // Google 2FA Tekshiruvi
-    if (user.googleAuthEnabled) {
-      if (!googleAuthCode) {
-        return res.status(200).json({ requiresGoogleAuth: true, message: "2FA kodi kerak" });
-      }
-      const verified = speakeasy.totp.verify({
-        secret: user.googleAuthSecret,
-        encoding: 'base32',
-        token: googleAuthCode,
-        window: 1 
-      });
-      if (!verified) return res.status(400).json({ message: "2FA kod xato" });
-    }
-
-    user.loginAttempts = 0;
-    const { accessToken, refreshToken, refreshTokenId } = createTokens(user, deviceId);
-
-    // Qurilmalar ro'yxatini boshqarish (Cleanup + Update)
-    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-    user.devices = (user.devices || []).filter(d => d.isActive || new Date(d.lastLogin) > thirtyDaysAgo);
-
-    const devIdx = user.devices.findIndex(d => d.deviceId === deviceId);
-    const deviceData = {
-      deviceId, deviceType, deviceOS, lastLogin: new Date(),
-      isActive: true, token: accessToken, kickedAt: null
-    };
-
-    if (devIdx > -1) {
-      user.devices[devIdx] = { ...user.devices[devIdx].toObject(), ...deviceData };
-    } else {
-      user.devices.push(deviceData);
-    }
-
-    user.activeDevice = { deviceId, deviceType, deviceOS, lastLogin: new Date() };
-    
-    // 🚀 Parallel bajarish — login vaqtini tejash uchun
-    const [savedUser] = await Promise.all([
-      user.save(),
-      UserSessionService.createSession({
-        userId: user._id, deviceId, refreshToken, refreshTokenId, deviceType, deviceOS,
-        ip: req.headers['x-forwarded-for']?.split(',')[0] || req.socket.remoteAddress,
-        userAgent: req.headers['user-agent']
-      }),
-      AuditService.logUserAction({ login: user.login, action: 'LOGIN', status: 'SUCCESS' })
-    ]);
-
-    res.cookie('accessToken', accessToken, { ...cookieOptions, maxAge: 60 * 60 * 1000 });
-    res.cookie('refreshToken', refreshToken, { ...cookieOptions, maxAge: 7 * 24 * 60 * 60 * 1000 });
-
-    // Effektif kategoriyalarni aniqlash
-    let effectiveCategories = user.shopCategories || [];
-    if (effectiveCategories.length === 0 && user.shopType) {
-      const typeData = await ShopType.findOne({ value: user.shopType });
-      if (typeData) {
-        effectiveCategories = typeData.categories;
-      }
-    }
-
-    return res.json({
-      success: true,
-      user: {
-        login: user.login,
-        role: user.role,
-        name: user.name,
-        shopName: user.shopName,
-        shopType: user.shopType,
-        shopCategories: effectiveCategories,
-        subscription: user.subscription
-      }
-    });
-  } catch (err) {
-    if (isDev) console.error("❌ Login Error:", err);
-    return res.status(500).json({ message: "Server xatosi" });
-  }
+  return {
+    login: user.login,
+    role: user.role,
+    name: user.name,
+    shopName: user.shopName,
+    shopType: user.shopType,
+    storeCategory: user.ondexStoreCategory || '',
+    shopCategories: effectiveCategories,
+    subscription: user.subscription
+  };
 };
 
 // ====================================================================
@@ -245,6 +193,31 @@ exports.refresh = async (req, res) => {
       //  REUSE DETECTION: Token o'g'irlangan bo'lishi mumkin!
       await UserSessionService.clearAllSessions(user._id);
       return res.status(403).json({ message: "Xavfsizlik xatosi: Qayta login qiling" });
+    }
+
+    // ┌─ KATEGORIYANI OnDex'DAN YANGILASH ───────────────────────────────┐
+    // Admin do'konni qurtdan oddiy do'konga (yoki aksincha) o'tkazgan bo'lishi
+    // mumkin; kategoriya tokenga yoziladi (`sc`), shuning uchun yangilash shu
+    // yerda — token muddati tugab, yangilanganda. OnDex javob bermasa saqlangan
+    // qiymat bilan davom etamiz (kassa to'xtab qolmasin), lekin kategoriyasi
+    // HECH QACHON aniqlanmagan do'kon (eski hisob) kiritilmaydi.
+    // └────────────────────────────────────────────────────────────────────┘
+    if (user.ondexUserId) {
+      try {
+        const identity = await identityByUserId(user.ondexUserId);
+        if (syncPartnerProfile(user, identity)) await user.save();
+      } catch (e) {
+        if (e && e.kind === 'invalid') {
+          // OnDex akkaunti o'chirilgan/topilmaydi — sessiya yangilanmaydi.
+          await UserSessionService.clearAllSessions(user._id);
+          return res.status(403).json({ message: "Hisob mavjud emas. Qayta kiring" });
+        }
+        console.error(`⚠️ [refresh] OnDex kimligi yangilanmadi: ${e && e.message}`);
+      }
+    }
+    if (user.ondexPartnerRole === 'store' && !user.ondexStoreCategory) {
+      await UserSessionService.clearAllSessions(user._id);
+      return res.status(403).json({ message: "Do'kon turi aniqlanmadi. Qayta kiring" });
     }
 
     const { accessToken, refreshToken, refreshTokenId } = createTokens(user, decoded.deviceId);
@@ -357,61 +330,39 @@ exports.kickDevice = async (req, res) => {
   }
 };
 
-// ====================================================================
-// 👤 USER OPS
-// ====================================================================
-exports.changePassword = async (req, res) => {
-  try {
-    const currentPassword = sanitizeString(req.body.currentPassword, 'currentPassword');
-    const newPassword     = sanitizeString(req.body.newPassword, 'newPassword');
-
-    if (!newPassword || newPassword.length < 8) {
-      return res.status(400).json({ message: "Parol juda qisqa" });
-    }
-
-    const user = await User.findOne({ login: { $eq: req.user.login } }).select('+password');
-    const isMatch = await bcrypt.compare(currentPassword, user.password || '');
-    if (!isMatch) return res.status(401).json({ message: "Joriy parol xato" });
-
-    // Yangi parol eski parol bilan bir xil emasligini tekshirish
-    const isNewPasswordSameAsOld = await bcrypt.compare(newPassword, user.password || '');
-    if (isNewPasswordSameAsOld) {
-      return res.status(400).json({ message: "Yangi parol joriy paroldan farqli bo'lishi kerak" });
-    }
-
-    user.password = newPassword;
-    await user.save();
-    return res.json({ success: true, message: "Parol muvaffaqiyatli yangilandi" });
-  } catch (err) {
-    return res.status(500).json({ message: "Server xatosi" });
-  }
-};
-
 exports.register = async (req, res) => {
   try {
-    const login    = sanitizeString(req.body.login, 'login').toLowerCase();
-    const password = sanitizeString(req.body.password, 'password');
+    // Do'kon hisobini ADMIN ochadi: hamkorning OnDex telefonini kiritadi.
+    // Hamkor OnDex orqali birinchi marta kirganda hisob unga ulanadi
+    // (`routes/ondexAuth.js`). Parol yo'q.
+    const phone    = normalizePhone(sanitizeString(req.body.ondexPhone, 'ondexPhone'));
     const shopName = sanitizeString(req.body.shopName, 'shopName');
     const shopType  = sanitizeString(req.body.shopType, 'shopType');
     const shopCategories = req.body.shopCategories || [];
     //  Admin faqat bitta bo'lishi kerak. Yangi qo'shiladiganlar faqat 'cashier' bo'ladi.
     const role     = 'cashier';
 
-    if (password.length < 8) return res.status(400).json({ message: "Parol 8 tadan ko'p bo'lsin" });
+    // O'zbekiston raqami: 998 + 9 raqam
+    if (!/^998\d{9}$/.test(phone)) {
+      return res.status(400).json({ message: "OnDex telefon raqami noto'g'ri (+998 XX XXX XX XX)" });
+    }
 
-    const exists = await User.findOne({ login: { $eq: login } });
-    if (exists) return res.status(409).json({ message: "Login band" });
+    // `login` — do'konning ASOSIY kaliti (mahsulot, sotuv shunga bog'langan).
+    // Telefon raqamidan olinadi va keyin o'zgarmaydi.
+    const login = phone;
+    const exists = await User.findOne({ $or: [{ login: { $eq: login } }, { ondexPhone: { $eq: phone } }] });
+    if (exists) return res.status(409).json({ message: "Bu raqam bilan do'kon allaqachon ochilgan" });
 
     // 7 kunlik bepul pro rejasi
     const trialEndDate = new Date();
     trialEndDate.setDate(trialEndDate.getDate() + 7);
 
-    const newUser = new User({ 
-      login, 
-      password, 
-      role, 
-      shopName, 
-      shopType, 
+    const newUser = new User({
+      login,
+      ondexPhone: phone,
+      role,
+      shopName,
+      shopType,
       shopCategories,
       subscription: {
         plan: 'pro',
@@ -430,13 +381,14 @@ exports.register = async (req, res) => {
     }
     await AuditService.logUserAction({ login, action: 'REGISTER', status: 'SUCCESS' });
 
-    return res.status(201).json({ 
-      success: true, 
-      user: { 
-        login, 
+    return res.status(201).json({
+      success: true,
+      user: {
+        login,
+        ondexPhone: phone,
         role,
         subscription: newUser.subscription
-      } 
+      }
     });
   } catch (err) {
     return res.status(500).json({ message: "Server xatosi" });
@@ -487,37 +439,6 @@ exports.updateUserCategories = async (req, res) => {
   }
 };
 
-exports.confirmLogin = async (req, res) => {
-  try {
-    const login    = sanitizeString(req.body.login, 'login').toLowerCase();
-    const deviceId = sanitizeDeviceId(req.body.deviceId);
-    const confirm  = req.body.confirm;
-
-    if (req.user.login !== login && req.user.role !== 'admin') {
-      return res.status(403).json({ message: "Ruxsat yo'q" });
-    }
-
-    const user = await User.findOne({ login: { $eq: login } });
-    if (!user) return res.status(404).json({ message: "Topilmadi" });
-
-    if (confirm) {
-      // Eski aktiv sessiyani yopish
-      if (user.activeDevice?.deviceId) {
-        await UserSession.updateOne(
-          { userId: user._id, deviceId: user.activeDevice.deviceId, isActive: true },
-          { isActive: false, lastLogout: new Date() }
-        );
-      }
-      user.activeDevice = { deviceId, lastLogin: new Date() };
-      await user.save();
-      return res.json({ message: "Tasdiqlandi" });
-    }
-    return res.json({ message: "Rad etildi" });
-  } catch (err) {
-    return res.status(500).json({ message: "Xatolik" });
-  }
-};
-
 exports.logout = async (req, res) => {
   try {
     const deviceId = sanitizeDeviceId(req.body.deviceId);
@@ -558,27 +479,6 @@ exports.logout = async (req, res) => {
 exports.isAdmin = (req, res, next) => {
   if (req.user.role !== 'admin') return res.status(403).json({ message: "Admin emas" });
   next();
-};
-
-exports.createAdmin = async (req, res) => {
-  try {
-    const adminExists = await User.findOne({ role: 'admin' });
-    if (adminExists) {
-      return res.status(403).json({ message: "Admin allaqachon mavjud. Faqat bitta admin bo'lishi mumkin." });
-    }
-
-    const login    = sanitizeString(req.body.login, 'login').toLowerCase();
-    const password = sanitizeString(req.body.password, 'password');
-
-    const exists = await User.findOne({ login: { $eq: login } });
-    if (exists) return res.status(409).json({ message: "Login band" });
-
-    const newAdmin = new User({ login, password, role: 'admin' });
-    await newAdmin.save();
-    return res.status(201).json({ success: true, message: "Admin yaratildi" });
-  } catch (err) {
-    return res.status(500).json({ message: "Xatolik" });
-  }
 };
 
 // Foydalanuvchi holati (admin yoki o'zi)
@@ -734,6 +634,7 @@ exports.getMe = async (req, res) => {
         name: currentUser.name,
         shopName: currentUser.shopName,
         shopType: currentUser.shopType,
+        storeCategory: currentUser.ondexStoreCategory || '',
         shopCategories: effectiveCategories,
         activeDevice: req.user.deviceId,
         subscription: currentUser.subscription

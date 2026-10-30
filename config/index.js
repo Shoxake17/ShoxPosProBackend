@@ -15,9 +15,15 @@ const env = cleanEnv(process.env, {
   MONGO_URI:              str(),
   NODE_ENV:               str({ choices: ['development', 'production', 'test'], default: 'development' }),
   
-  // --- SHOXPAY INTEGRATION ---
-  SHOXPAY_BACKEND_URL:    str({ default: 'http://localhost:4000' }), // ✅ YANGI QO'SHILDI
-  SHOXPOSPRO_SECRET:      str({ default: 'shoxpospro-secret-2024' }), // ✅ YANGI QO'SHILDI
+  // --- OnDex orqali KIRISH (ShoxPos'ning o'z auth tizimi yo'q) ---
+  // Telefon, Telegram kodi va parolni OnDex API tekshiradi (server-server),
+  // biz kimlikni olib o'z sessiyamizni beramiz. Bo'sh bo'lsa kirish O'CHIQ
+  // (hech kim kira olmaydi) — shuning uchun server ishga tushganda ogohlantiriladi.
+  ONDEX_API_URL:          str({ default: '', desc: 'OnDex API manzili, masalan https://api-ondex.shoxpro.uz' }),
+  SSO_CLIENT_ID:          str({ default: 'merchant' }),
+  SSO_CLIENT_SECRET:      str({ default: '', desc: 'OnDex tomonidagi SSO_MERCHANT_SECRET bilan BIR XIL' }),
+  SSO_REDIRECT_URI:       str({ default: '', desc: 'OnDex ro\'yxatidagi qaytish manzili bilan ANIQ teng (brauzer bu manzilga bormaydi; server-server tekshiruv uchun)' }),
+  BOOTSTRAP_ADMIN_PHONE:  str({ default: '', desc: 'Birinchi admin telefoni (OnDex raqami). Admin yo\'q bo\'lgandagina ishlaydi' }),
 
   // --- LOGGING & AUDIT ---
   LOG_LEVEL:              str({ choices: ['info', 'debug', 'warn', 'error'], default: 'info' }),

@@ -73,7 +73,6 @@ app.use(helmet({
                 'ws:', 'wss:',
                 'http://localhost:3000',
                 'http://localhost:3001',
-                'http://localhost:4000', // ShoxPay Backend ulanishi uchun
                 'http://127.0.0.1:3000',
                 'https://cdn.jsdelivr.net',
                 'https://freeipapi.com',
@@ -133,6 +132,10 @@ const csrfLimiter = rateLimit({
 // Global limitlarni qo'llash
 app.use('/api', apiLimiter);
 
+// Do'kon kategoriyasi (qurt va h.k.) bo'yicha API cheklovi: marshrutlardan OLDIN,
+// shunda har qanday yangi marshrut ham avtomatik qo'riqlanadi (ro'yxatda yo'q = yopiq).
+app.use('/api', require('./services/storeAccess').storeCategoryGuard);
+
 // ====================================
 // 🔑 CSRF TOKEN ENDPOINT
 // ====================================
@@ -154,9 +157,7 @@ const scanProductsRouter = require('./routes/scanProducts')(csrfProtection);
 const aiRoutes = require('./routes/aiRoutes')(csrfProtection);
 const debtsRoutes = require('./routes/debts')(csrfProtection);
 const salesRoutes = require('./routes/salesRoutes')(csrfProtection);
-const biometricRouter = require('./routes/biometricRoutes')(csrfProtection);
-const authenticatorRouter = require('./routes/authenticatorRoutes')(csrfProtection);
-const cashbackProxy = require('./routes/cashbackProxy')(csrfProtection);
+const ondexAuthRouter = require('./routes/ondexAuth')(csrfProtection);
 const adminRoutes = require('./routes/adminRoutes')(csrfProtection);
 const pharmacyRoutes = require('./routes/pharmacyRoutes')(csrfProtection);
 const telegramRoutes = require('./routes/telegramRoutes')(csrfProtection);
@@ -178,11 +179,12 @@ const subscriptionRoutes = require('./routes/subscriptionRoutes');
 app.use('/metrics', metricsRouter);
 app.use('/api/users', verifyToken, userRoutes); // Auth middleware bilan
 app.use('/api/push', verifyToken, pushRoutes);
-app.use('/api/cashback', verifyToken, cashbackProxy);
 
+app.use('/api', ondexAuthRouter);
 app.use('/api', authRouter);
-app.use('/api', biometricRouter);
-app.use('/api/google-auth', authenticatorRouter);
+if (!require('./services/ondexSso').isConfigured()) {
+    console.warn('⚠️  OnDex orqali kirish SOZLANMAGAN (ONDEX_API_URL, SSO_CLIENT_SECRET, SSO_REDIRECT_URI) — hech kim kira olmaydi.');
+}
 app.use('/api', aiRoutes);
 app.use('/api/chat', userChatRoutes.router);
 app.use('/api/printer', printerRoutes);
@@ -241,6 +243,9 @@ app.use((err, req, res, next) => {
 // 🚀 SERVER START
 // ====================================
 const PORT = config.PORT || 3000;
+// Qurt mahsulotlari: OnDex'ga yuborilmay qolganlarini davriy qayta yuboradi.
+require('./services/qurtSync').startRetryLoop();
+
 server.listen(PORT, '0.0.0.0', () => {
     console.log(`
 ✅ SHOXPOSPRO SERVER ISHGA TUSHDI

@@ -10,11 +10,27 @@ const userSchema = new mongoose.Schema({
     lowercase: true, 
     trim: true 
   },
-  password: { 
-    type: String, 
-    required: true,
+  // Parol ENDI YO'Q: kirish OnDex orqali (yagona kirish). Maydon eski
+  // hujjatlar uchun qoldi va hech qachon to'ldirilmaydi.
+  password: {
+    type: String,
+    required: false,
     select: false
   },
+
+  // OnDex akkaunti bilan bog'lanish. `ondexPhone` — admin do'kon hisobini
+  // ochganda kiritadi (raqamlar, masalan 998901234567); do'konchi OnDex
+  // orqali birinchi marta kirganda `ondexUserId` ulanadi va shundan keyin
+  // kimlik SHU id bo'yicha taniladi (telefon o'zgarsa ham).
+  ondexUserId: { type: String, unique: true, sparse: true, default: undefined },
+  ondexPhone:  { type: String, trim: true, index: true, default: undefined },
+  // OnDex'da hamkor akkaunti (restoran/do'kon) bo'lsa — rol va muassasa ID'si.
+  // Hisob SHU orqali avtomatik ochiladi (admin OnDex panelidan ro'yxatdan o'tkazadi).
+  ondexPartnerRole: { type: String, enum: ['store', 'restaurant'], default: undefined },
+  ondexEntityId:    { type: String, trim: true, default: undefined },
+  // Do'kon kategoriyasi (OnDex belgilaydi): qaysi sahifa/API ochiqligini
+  // `services/storeAccess.js` shundan hal qiladi. Har kirishda yangilanadi.
+  ondexStoreCategory: { type: String, enum: ['qurt', 'store', 'pharmacy'], default: undefined },
   role: { 
     type: String, 
     enum: ['admin', 'cashier'], 

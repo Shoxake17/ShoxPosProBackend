@@ -14,13 +14,13 @@ module.exports = (csrfProtection) => {
   const router = express.Router();
 
   // 📈 Prometheus metrikalarini import qilamiz
-  const { totalSales, totalCashbackGiven } = require('./metrics'); 
+  const { totalSales } = require('./metrics');
 
 // ✅ Sotuvlarni saqlash - To'liq Monitoring bilan
 router.post('/sell-product/:login', verifyToken, csrfProtection, async (req, res) => {
   try {
     const { login } = req.params;
-    const { sales, paymentMethod, cashbackAmount } = req.body;
+    const { sales, paymentMethod } = req.body;
 
     // 🛡️ A01: Broken Access Control
     const safeLogin = String(login).trim().toLowerCase();
@@ -161,12 +161,7 @@ router.post('/sell-product/:login', verifyToken, csrfProtection, async (req, res
       });
     }
 
-    // �💰 KESHBEK MONITORINGI
-    if (cashbackAmount && typeof cashbackAmount === 'number') {
-      totalCashbackGiven.inc(cashbackAmount);
-    }
-
-    res.json({ 
+    res.json({
       success: true,
       message: `${savedSales.length} ta mahsulot sotildi`,
       count: savedSales.length,

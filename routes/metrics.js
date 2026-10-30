@@ -31,12 +31,6 @@ const totalSales = new client.Counter({
     labelNames: ['payment_type', 'login'] 
 });
 
-// 5. BUSINESS METRIC: Keshbek miqdori
-const totalCashbackGiven = new client.Counter({
-    name: 'shoxpay_cashback_given_total',
-    help: 'Mijozlarga berilgan jami keshbek miqdori'
-});
-
 // ==========================================
 // 🚀 MUHIM: METRIKALARNI INITIALIZE QILISH
 // Bu qism Grafanada "No Data" xatosini yo'qotadi
@@ -44,7 +38,6 @@ const totalCashbackGiven = new client.Counter({
 totalSales.labels({ payment_type: 'cash' }).inc(0);
 totalSales.labels({ payment_type: 'card' }).inc(0);
 totalSales.labels({ payment_type: 'shoxpay' }).inc(0);
-totalCashbackGiven.inc(0);
 activeRequests.set(0);
 
 // Middleware: Har bir so'rovni o'lchash
@@ -75,6 +68,5 @@ router.get('/', async (req, res) => {
 
 module.exports = {
     router,
-    totalSales,
-    totalCashbackGiven
+    totalSales
 };

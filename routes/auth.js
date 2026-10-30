@@ -10,8 +10,7 @@ const User = require('../models/User');
 const ShopType = require('../models/ShopType');
 const verifyToken = require('../middleware/verifyToken');
 const { cacheMiddleware, invalidateUserCache, CACHE_TTL } = require('../middleware/redisCache');
-const loginLimiter = require('../middleware/rateLimit');
-const { loginValidation, registerValidation, handleValidationErrors } = require('../middleware/validateAuth');
+const { registerValidation, handleValidationErrors } = require('../middleware/validateAuth');
 
 // ✅ Factory pattern: csrfProtection tashqaridan uzatiladi
 module.exports = (csrfProtection) => {
@@ -20,55 +19,6 @@ module.exports = (csrfProtection) => {
   // ====================================
   // 🔓 PUBLIC ENDPOINTS (CSRF'siz)
   // ====================================
-
-  /**
-   * @route POST /api/login
-   * @description Foydalanuvchini tizimga kiritish - BLOKLANGAN USER TEKSHIRUVI BILAN
-   * @access Public (rate limited - credential stuffing oldini olish)
-   */
-  router.post('/login', loginLimiter, (req, res, next) => {
-    if (process.env.NODE_ENV !== 'production') {
-    }
-    next();
-  }, loginValidation, handleValidationErrors, async (req, res) => {
-    try {
-      const { login, password } = req.body;
-
-      // 1. Foydalanuvchini topish
-      const user = await User.findOne({
-        login: login.toLowerCase().trim()
-      }).select('+password');
-
-      if (!user) {
-        return res.status(404).json({
-          success: false,
-          message: "Login yoki parol noto'g'ri"
-        });
-      }
-
-      // ⚠️ 2. BLOKLANGAN USER TEKSHIRUVI - ENG MUHIM!
-      if (user.blocked === true) {
-        console.log(`🚫 [Login] Bloklangan user urinishi: ${login}`);
-        return res.status(403).json({
-          success: false,
-          blocked: true,
-          message: "Sizning hisobingiz bloklangan. Administrator bilan bog'laning.",
-          contact: "Telegram: @ShoxPosPro_Support",
-          reason: "Admin tomonidan bloklangan"
-        });
-      }
-
-      // 3. authController.loginni chaqirish (parol tekshiruvi va boshqalar)
-      await authController.login(req, res);
-
-    } catch (error) {
-      console.error('❌ Login route error:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Server xatosi'
-      });
-    }
-  });
 
 /**
    * @route POST /api/register
@@ -110,20 +60,6 @@ module.exports = (csrfProtection) => {
 
 
   /**
-   * @route POST /api/change-password
-   * @description Foydalanuvchi parolini o'zgartirish
-   * @access Protected
-   */
-  router.post('/change-password', verifyToken, csrfProtection, async (req, res) => {
-    try {
-      await authController.changePassword(req, res);
-    } catch (error) {
-      console.error('❌ Change password route error:', error);
-      res.status(500).json({ success: false, message: 'Server xatosi' });
-    }
-  });
-
-  /**
    * @route POST /api/refresh
    * @description JWT tokenni yangilash (refresh token orqali)
    * @access Public
@@ -161,30 +97,6 @@ module.exports = (csrfProtection) => {
     }
   });
 
-  /**
-   * @route POST /api/confirm-login
-   * @description Yangi qurilmadan kirishni tasdiqlash
-   * @access Protected
-   */
-  router.post('/confirm-login', verifyToken, csrfProtection, async (req, res) => {
-    try {
-      await authController.confirmLogin(req, res);
-    } catch (error) {
-      console.error('❌ Confirm login route error:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Tasdiqlash xatosi'
-      });
-    }
-  });
-
-  /**
-   * @route POST /api/change-password
-   * @description Foydalanuvchi parolini o'zgartirish
-   * @access Protected
-   */
-  router.post('/change-password', verifyToken, csrfProtection, authController.changePassword);
-  
   // ─── Foydalanuvchi holati ──────────────────────────────────────────────────
   router.get('/user-status', verifyToken, authController.userStatus);
 
@@ -243,28 +155,6 @@ module.exports = (csrfProtection) => {
   // ====================================
 
   /**
-   * @route POST /api/create-admin
-   * @description Yangi admin yaratish (faqat super admin)
-   * @access Admin only
-   */
-  router.post('/create-admin',
-    verifyToken,
-    authController.isAdmin,
-    csrfProtection,
-    async (req, res) => {
-      try {
-        await authController.createAdmin(req, res);
-      } catch (error) {
-        console.error('❌ Create admin error:', error);
-        res.status(500).json({
-          success: false,
-          message: 'Admin yaratishda xato'
-        });
-      }
-    }
-  );
-
-  /**
    * @route GET /api/verify-session
    * @description Joriy sessiyani tekshirish
    * @access Protected
@@ -290,6 +180,7 @@ module.exports = (csrfProtection) => {
           role: req.user.role,
           shopName: user?.shopName,
           shopType: user?.shopType,
+          storeCategory: user?.ondexStoreCategory || '',
           shopCategories: effectiveCategories,
           subscription: user?.subscription
         }

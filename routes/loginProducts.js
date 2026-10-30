@@ -4,6 +4,8 @@ const AuditService = require('../services/auditService');
 const User = require('../models/User');
 const ShopType = require('../models/ShopType');
 const Product = require('../models/Product');
+const multer = require('multer');
+const qurtSync = require('../services/qurtSync');
 
 module.exports = (csrfProtection) => {
   const router = express.Router();
@@ -41,6 +43,40 @@ function sanitizeName(value) {
   if (/\$/.test(value)) throw new Error("name da noto'g'ri belgi");
   return value.trim().slice(0, 128);
 }
+
+// ── QURT maydonlari (faqat qurt do'konlari uchun; OnDex ham qayta tekshiradi) ──
+function sanitizeLongText(value, field) {
+  if (value === undefined || value === null || value === '') return '';
+  if (typeof value !== 'string') throw new Error(`${field} matn bo'lishi kerak`);
+  const s = value.trim();
+  if (s.length > 1000) throw new Error(`${field} juda uzun (maks 1000 belgi)`);
+  return s;
+}
+
+function sanitizeWeightGrams(value) {
+  const n = Math.round(Number(value));
+  if (!Number.isFinite(n) || n < 1 || n > 100000) {
+    throw new Error("Gramm 1 dan 100000 gacha bo'lishi kerak");
+  }
+  return n;
+}
+
+// Rasm manzili: faqat OnDex ombori qaytargan (https yoki o'z serverining nisbiy yo'li).
+function sanitizeImageUrl(value) {
+  if (value === undefined || value === null || value === '') return '';
+  if (typeof value !== 'string' || value.length > 500 || /\s/.test(value)) {
+    throw new Error("Rasm manzili noto'g'ri");
+  }
+  const ok = (/^https:\/\/[^/]/.test(value)) || (value.startsWith('/') && !value.startsWith('//') && !value.startsWith('/\\'));
+  if (!ok) throw new Error("Rasm manzili noto'g'ri");
+  return value;
+}
+
+// Rasm yuklash: xotirada (diskka yozilmaydi), 5 MB, bitta fayl.
+const imageUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024, files: 1 },
+});
 
 // ====================================================================
 // GET /products/:login
@@ -287,17 +323,35 @@ router.post("/update-or-add-user-product", verifyToken, csrfProtection, async (r
     const sQty       = sanitizeNumber(quantity || 0, 'quantity');
     const sCategory  = sanitizeCategory(category);
 
+    const $set = {
+      name:      sName,
+      price:     sPrice,
+      basePrice: sBasePrice,
+      quantity:  sQty,
+      category:  sCategory
+    };
+
+    // QURT: rasm, tavsif, tarkib, gramm. Faqat qurt do'koni yoza oladi (boshqalarniki
+    // jimgina e'tiborsiz qoladi). Kalit YUBORILMAGAN bo'lsa mavjud qiymat saqlanadi
+    // (narx tahriri rasm/tavsifni o'chirib yubormasin).
+    const owner = await User.findOne({ login: safeLogin }).select('ondexStoreCategory').lean();
+    if (owner && owner.ondexStoreCategory === 'qurt') {
+      const has = (k) => Object.prototype.hasOwnProperty.call(req.body, k);
+      if (has('weightGrams')) {
+        $set.weightGrams = sanitizeWeightGrams(req.body.weightGrams);
+      } else if (!(await Product.exists({ login: safeLogin, barcode: sBarcode }))) {
+        throw new Error("Gramm kiritilishi shart");
+      }
+      if (has('description')) $set.description = sanitizeLongText(req.body.description, 'Tavsif');
+      if (has('composition')) $set.composition = sanitizeLongText(req.body.composition, 'Tarkib');
+      if (has('imageUrl'))    $set.imageUrl    = sanitizeImageUrl(req.body.imageUrl);
+      // OnDex'ga yuborilishi kerak (`services/qurtSync.js` hook orqali yuboradi).
+      $set.qurtSynced = false;
+    }
+
     const updated = await Product.findOneAndUpdate(
       { login: safeLogin, barcode: sBarcode },
-      {
-        $set: {
-          name:      sName,
-          price:     sPrice,
-          basePrice: sBasePrice,
-          quantity:  sQty,
-          category:  sCategory
-        }
-      },
+      { $set },
       { upsert: true, new: true }
     );
 
@@ -319,6 +373,36 @@ router.post("/update-or-add-user-product", verifyToken, csrfProtection, async (r
     res.json({ success: true, product: updated });
   } catch (err) {
     res.status(400).json({ message: err.message });
+  }
+});
+
+// ====================================================================
+// POST /qurt-image — qurt mahsuloti rasmi (multipart `file`)
+//
+// Rasm OnDex omboriga yuklanadi (mijoz ilovasi shu yerdan oladi); ShoxPos uni
+// saqlamaydi. Faqat qurt do'koni uchun. Natija: { url } — keyin mahsulotga
+// `imageUrl` sifatida yoziladi.
+// ====================================================================
+router.post("/qurt-image", verifyToken, csrfProtection, (req, res, next) => {
+  imageUpload.single('file')(req, res, (err) => {
+    if (err) return res.status(400).json({ message: "Fayl juda katta (maks 5MB) yoki noto'g'ri" });
+    next();
+  });
+}, async (req, res) => {
+  try {
+    const user = await User.findOne({ login: req.user.login }).select('ondexUserId ondexStoreCategory').lean();
+    if (!qurtSync.isQurtUser(user)) {
+      return res.status(403).json({ message: "Bu amal faqat qurt do'konlari uchun" });
+    }
+    const f = req.file;
+    if (!f || !f.buffer || f.size === 0) return res.status(400).json({ message: "Rasm tanlanmadi" });
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(f.mimetype)) {
+      return res.status(400).json({ message: "Faqat jpg, png yoki webp rasm qabul qilinadi" });
+    }
+    const url = await qurtSync.uploadImage(user, f.buffer, f.originalname || 'image', f.mimetype, req.ip);
+    return res.json({ success: true, url });
+  } catch (err) {
+    return res.status(err.status || 502).json({ message: err.message || "Rasm yuklab bo'lmadi" });
   }
 });
 
