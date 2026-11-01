@@ -168,9 +168,38 @@ async function retryPending() {
   }
 }
 
+/**
+ * Server har yoqilganda bir marta: qurt mahsulotlarining HAMMASINI "yuborilmagan" deb
+ * belgilaydi, shunda keyingi qayta urinish ularning hozirgi holatini (narx, QOLDIQ) OnDex'ga
+ * qayta yuboradi. Kerak: OnDex qoldiqni (`stock`) faqat POS yuborganda biladi — eski
+ * versiya yuborgan mahsulotlar yangilanmaguncha mijozda "tugagan" bo'lib turardi.
+ * (`Product.collection` hook'larni aylanib o'tadi — 1000 ta qayta yuborish navbati yo'q.)
+ */
+async function markAllForResync() {
+  const Product = require('../models/Product');
+  const qurtUsers = await User.find({ ondexStoreCategory: 'qurt', ondexUserId: { $exists: true } })
+    .select('login').lean();
+  if (qurtUsers.length === 0) return 0;
+  const res = await Product.collection.updateMany(
+    { login: { $in: qurtUsers.map((u) => u.login) }, weightGrams: { $gt: 0 } },
+    { $set: { qurtSynced: false } },
+  );
+  return res.modifiedCount || 0;
+}
+
 function startRetryLoop() {
   if (!configured()) return;
   let running = false;
+  // Yoqilgach 5 soniyadan keyin: hammasini qayta yuborishga belgilab, darhol bir marta yuboramiz.
+  const boot = setTimeout(async () => {
+    try {
+      const n = await markAllForResync();
+      if (n > 0) console.log(`🔄 [qurt] ${n} ta mahsulot OnDex bilan qayta solishtirilmoqda (qoldiq)`);
+      running = true;
+      try { await retryPending(); } finally { running = false; }
+    } catch (e) { console.error(`⚠️ [qurt resync] ${e.message}`); }
+  }, 5000);
+  if (boot.unref) boot.unref();
   const t = setInterval(async () => {
     if (running) return;
     running = true;
