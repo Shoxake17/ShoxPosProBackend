@@ -66,6 +66,8 @@ function toPayload(p) {
     weight_grams: weight,
     image_url: p.imageUrl || '',
     available: Number(p.quantity) > 0,
+    // Buyurtma uchun qoldiq (dona): OnDex shundan band qilinganini ayiradi.
+    stock: Math.max(0, Math.min(1000000, Math.floor(Number(p.quantity) || 0))),
   };
 }
 
