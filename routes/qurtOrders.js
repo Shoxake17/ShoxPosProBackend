@@ -116,6 +116,44 @@ module.exports = (csrfProtection) => {
     } catch (e) { fail(res, e); }
   });
 
+  // ── Logistika: do'konning o'z kuryerlari (sotuvchi o'zi boshqaradi) ──
+  const wrap = (fn) => async (req, res) => {
+    try { await fn(req, res); } catch (e) { fail(res, e); }
+  };
+  const mutate = [verifyToken, csrfProtection, requireQurtStore, transitionLimiter];
+
+  router.get('/qurt-couriers', verifyToken, requireQurtStore, wrap(async (req, res) => {
+    const couriers = await qurtOrders.listCouriers(req.qurtUser);
+    res.set('Cache-Control', 'no-store');
+    res.json({ success: true, couriers });
+  }));
+
+  router.post('/qurt-couriers', ...mutate, wrap(async (req, res) => {
+    const courier = await qurtOrders.addCourier(req.qurtUser, req.body || {});
+    res.status(201).json({ success: true, courier });
+  }));
+
+  router.delete('/qurt-couriers/:id', ...mutate, wrap(async (req, res) => {
+    await qurtOrders.removeCourier(req.qurtUser, req.params.id);
+    res.json({ success: true });
+  }));
+
+  router.post('/qurt-couriers/:id/settle', ...mutate, wrap(async (req, res) => {
+    const result = await qurtOrders.settle(req.qurtUser, req.params.id);
+    res.json({ success: true, result });
+  }));
+
+  router.post('/qurt-assign', ...mutate, wrap(async (req, res) => {
+    const b = req.body || {};
+    const result = await qurtOrders.assign(req.qurtUser, { courierId: b.courierId, date: b.date, orderIds: b.orderIds });
+    res.json({ success: true, result });
+  }));
+
+  router.post('/qurt-orders/:id/unassign', ...mutate, wrap(async (req, res) => {
+    await qurtOrders.unassign(req.qurtUser, req.params.id);
+    res.json({ success: true });
+  }));
+
   router.get('/qurt-orders/:id', verifyToken, requireQurtStore, async (req, res) => {
     try {
       const order = await qurtOrders.getOrder(req.qurtUser, req.params.id);

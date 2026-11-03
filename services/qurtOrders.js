@@ -49,7 +49,7 @@ function fromOndex(res) {
   const msg = res && res.data && typeof res.data.error === 'string' ? res.data.error : null;
   switch (res.status) {
     case 400: return new QurtOrderError(400, msg || "So'rov noto'g'ri");
-    case 404: return new QurtOrderError(404, 'Buyurtma topilmadi');
+    case 404: return new QurtOrderError(404, msg || 'Topilmadi');
     case 409: return new QurtOrderError(409, msg || "Buyurtma holatini o'zgartirib bo'lmaydi (boshqa joyda o'zgargan bo'lishi mumkin)");
     case 403: case 401: return new QurtOrderError(403, "Bu do'kon qurt buyurtmalarini boshqara olmaydi");
     case 429: return new QurtOrderError(429, "Juda ko'p so'rov. Birozdan so'ng urinib ko'ring");
@@ -208,9 +208,76 @@ async function restoreForOrder(orderId) {
   return true;
 }
 
+// ── Logistika: do'konning o'z kuryerlari ────────────────────────────────
+//
+// Sotuvchi logistikani O'ZI hal qiladi: kuryer qo'shadi, buyurtmani biriktiradi, kuryer
+// topshirgan naqd pulni qabul qiladi. Egalik (kuryer/buyurtma shu do'konniki) OnDex'da tekshiriladi.
+
+const PHONE_RE = /^\+?[0-9]{9,15}$/;
+const NAME_MAX = 80;
+
+function cleanIds(ids) {
+  if (ids === undefined || ids === null) return undefined;
+  if (!Array.isArray(ids) || ids.length > 500 || !ids.every(validId)) {
+    throw new QurtOrderError(400, "Buyurtmalar ro'yxati noto'g'ri");
+  }
+  return ids;
+}
+
+async function listCouriers(user) {
+  const res = await ondex(user, 'get', '/merchant/qurt/couriers');
+  if (res.status !== 200) throw fromOndex(res);
+  return Array.isArray(res.data && res.data.couriers) ? res.data.couriers : [];
+}
+
+async function addCourier(user, { phone, name } = {}) {
+  const p = typeof phone === 'string' ? phone.replace(/[\s()-]/g, '') : '';
+  const n = typeof name === 'string' ? name.trim() : '';
+  if (!PHONE_RE.test(p)) throw new QurtOrderError(400, "Telefon raqami noto'g'ri");
+  if (n.length < 2 || n.length > NAME_MAX) throw new QurtOrderError(400, `Ism 2..${NAME_MAX} belgi bo'lsin`);
+  const res = await ondex(user, 'post', '/merchant/qurt/couriers', { phone: p, name: n });
+  if (res.status !== 201) throw fromOndex(res);
+  return res.data;
+}
+
+async function removeCourier(user, id) {
+  if (!validId(id)) throw new QurtOrderError(404, 'Kuryer topilmadi');
+  const res = await ondex(user, 'delete', `/merchant/qurt/couriers/${encodeURIComponent(id)}`);
+  if (res.status !== 204 && res.status !== 200) throw fromOndex(res);
+}
+
+async function assign(user, { courierId, date, orderIds } = {}) {
+  if (!validId(courierId)) throw new QurtOrderError(400, 'Kuryerni tanlang');
+  const body = { courier_id: courierId };
+  if (date !== undefined && date !== '') {
+    if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new QurtOrderError(400, "Sana noto'g'ri");
+    body.date = date;
+  }
+  const ids = cleanIds(orderIds);
+  if (ids) body.order_ids = ids;
+  if (!body.date && !body.order_ids) throw new QurtOrderError(400, 'Reys sanasi yoki buyurtmalarni ko\'rsating');
+  const res = await ondex(user, 'post', '/merchant/qurt/assign', body);
+  if (res.status !== 200) throw fromOndex(res);
+  return res.data;
+}
+
+async function unassign(user, orderId) {
+  if (!validId(orderId)) throw new QurtOrderError(404, 'Buyurtma topilmadi');
+  const res = await ondex(user, 'post', `/merchant/qurt/orders/${encodeURIComponent(orderId)}/unassign`);
+  if (res.status !== 204 && res.status !== 200) throw fromOndex(res);
+}
+
+async function settle(user, courierId) {
+  if (!validId(courierId)) throw new QurtOrderError(404, 'Kuryer topilmadi');
+  const res = await ondex(user, 'post', `/merchant/qurt/couriers/${encodeURIComponent(courierId)}/settle`, {});
+  if (res.status !== 200) throw fromOndex(res);
+  return res.data;
+}
+
 module.exports = {
   QurtOrderError, validId, STATUSES, STORE_TARGETS,
   listOrders, getOrder, transition, restoreForOrder,
+  listCouriers, addCourier, removeCourier, assign, unassign, settle,
   // sinov uchun
   _itemsOf: itemsOf, _parseStatuses: parseStatuses,
 };

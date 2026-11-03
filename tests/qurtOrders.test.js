@@ -18,6 +18,10 @@ test('qurt do\'koni buyurtmalar yo\'liga ruxsat oladi, boshqa kategoriya cheklan
   assert.equal(isAllowed('qurt', '/qurt-orders'), true);
   assert.equal(isAllowed('qurt', '/qurt-orders/abc/transition'), true);
   assert.equal(isAllowed('qurt', '/qurt-orders-evil'), false, 'prefiks aldovi');
+  assert.equal(isAllowed('qurt', '/qurt-couriers'), true);
+  assert.equal(isAllowed('qurt', '/qurt-couriers/k1/settle'), true);
+  assert.equal(isAllowed('qurt', '/qurt-assign'), true);
+  assert.equal(isAllowed('qurt', '/qurt-couriers-evil'), false, 'prefiks aldovi');
   assert.equal(isAllowed('qurt', '/menu'), false);
 });
 
