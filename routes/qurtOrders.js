@@ -35,6 +35,24 @@ async function requireQurtStore(req, res, next) {
   }
 }
 
+/** Yangi buyurtma haqida Web Push; xatosi webhook'ni yiqitmaydi, eskirgan obuna tozalanadi. */
+async function pushNewOrder(owner, orderId, number) {
+  try {
+    const { sendPushToUser } = require('../utils/webPush');
+    const result = await sendPushToUser(owner.pushSubscription, {
+      title: '🛒 Yangi buyurtma',
+      body: `№ ${number} — qabul qilish uchun oching`,
+      icon: '/ondexmerchant-192.png',
+      badge: '/ondexmerchant-192.png',
+      tag: `qurt-${orderId}`,
+      url: '/qurt-orders',
+    });
+    if (result === 'expired') await User.updateOne({ login: owner.login }, { pushSubscription: null });
+  } catch (e) {
+    console.error('⚠️ [qurt-orders push]', e && e.message);
+  }
+}
+
 module.exports = (csrfProtection) => {
   const router = express.Router();
 
@@ -68,12 +86,17 @@ module.exports = (csrfProtection) => {
     if (qurtWebhook.alreadySeen(b.event_id)) return res.status(204).end(); // takror — allaqachon ishlangan
 
     try {
-      const owner = await User.findOne({ ondexEntityId: b.store_id, ondexStoreCategory: 'qurt' }).select('login').lean();
+      const owner = await User.findOne({ ondexEntityId: b.store_id, ondexStoreCategory: 'qurt' }).select('login pushSubscription').lean();
       if (owner) {
+        const socketApi = require('../socket');
         // Faqat KICHIK signal: tafsilotni panel o'zi (autentifikatsiya bilan) so'raydi.
-        require('../socket').sendToUser(owner.login, 'qurtOrder', {
+        socketApi.sendToUser(owner.login, 'qurtOrder', {
           event: b.event, orderId: b.order_id, number: b.number,
         });
+        // Panel ochiq bo'lmasa (jonli ulanish yo'q) — tizim bildirishnomasi (Web Push).
+        if (b.event === 'created' && owner.pushSubscription && !(socketApi.getUserSockets()[owner.login] || []).length) {
+          await pushNewOrder(owner, b.order_id, b.number);
+        }
         if (b.event === 'cancelled') await qurtOrders.restoreForOrder(b.order_id);
       }
       return res.status(204).end();
