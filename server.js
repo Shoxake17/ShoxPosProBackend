@@ -94,7 +94,13 @@ app.use(helmet({
 // ====================================
 // 📦 ASOSIY MIDDLEWARE'LAR (TARTIB MUHIM)
 // ====================================
-app.use(express.json({ limit: '2mb' }));
+// Qurt buyurtmasi webhook'i imzosi XOM tana ustida hisoblanadi: faqat shu yo'l uchun saqlanadi.
+app.use(express.json({
+    limit: '2mb',
+    verify: (req, res, buf) => {
+        if (req.originalUrl && req.originalUrl.startsWith('/api/qurt-orders/webhook')) req.rawBody = buf;
+    },
+}));
 app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 app.use(cookieParser(config.COOKIE_SECRET)); // CSRF dan oldin turishi shart
 
@@ -158,6 +164,7 @@ const aiRoutes = require('./routes/aiRoutes')(csrfProtection);
 const debtsRoutes = require('./routes/debts')(csrfProtection);
 const salesRoutes = require('./routes/salesRoutes')(csrfProtection);
 const ondexAuthRouter = require('./routes/ondexAuth')(csrfProtection);
+const qurtOrdersRoutes = require('./routes/qurtOrders')(csrfProtection);
 const adminRoutes = require('./routes/adminRoutes')(csrfProtection);
 const pharmacyRoutes = require('./routes/pharmacyRoutes')(csrfProtection);
 const telegramRoutes = require('./routes/telegramRoutes')(csrfProtection);
@@ -188,6 +195,7 @@ if (!require('./services/ondexSso').isConfigured()) {
 app.use('/api', aiRoutes);
 app.use('/api/chat', userChatRoutes.router);
 app.use('/api/printer', printerRoutes);
+app.use('/api', qurtOrdersRoutes);
 app.use('/api/products', loginProductRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api', scanProductsRouter);

@@ -41,6 +41,8 @@ const QURT_ALLOW = [
   /^\/users(\/|$)/, /^\/push(\/|$)/, /^\/subscription(\/|$)/, /^\/telegram(\/|$)/,
   // Mahsulot qo'shish, mahsulotlar bazasi, kirim bazasi
   /^\/products(\/|$)/,
+  // Qurt buyurtmalari (OnDex'dan keladi; webhook ham shu yo'lda)
+  /^\/qurt-orders(\/|$)/,
   // Sotuvlar, savdo statistikasi
   /^\/sales(\/|$)/, /^\/sold-buckets(\/|$)/,
   // Qarzlar

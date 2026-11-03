@@ -23,6 +23,7 @@ const env = cleanEnv(process.env, {
   SSO_CLIENT_ID:          str({ default: 'merchant' }),
   SSO_CLIENT_SECRET:      str({ default: '', desc: 'OnDex tomonidagi SSO_MERCHANT_SECRET bilan BIR XIL' }),
   SSO_REDIRECT_URI:       str({ default: '', desc: 'OnDex ro\'yxatidagi qaytish manzili bilan ANIQ teng (brauzer bu manzilga bormaydi; server-server tekshiruv uchun)' }),
+  QURT_WEBHOOK_SECRET:    str({ default: '', desc: 'OnDex QURT_POS_WEBHOOK_SECRET bilan BIR XIL (>= 32 belgi). Bo\'sh bo\'lsa jonli signal qabul qilinmaydi — panel davriy so\'raydi' }),
   BOOTSTRAP_ADMIN_PHONE:  str({ default: '', desc: 'Birinchi admin telefoni (OnDex raqami). Admin yo\'q bo\'lgandagina ishlaydi' }),
 
   // --- LOGGING & AUDIT ---

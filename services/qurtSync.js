@@ -238,4 +238,20 @@ async function uploadImage(user, buffer, filename, mimetype, ip) {
   throw Object.assign(new Error("Rasm yuklab bo'lmadi. Keyinroq urinib ko'ring"), { status: 502 });
 }
 
-module.exports = { schedule, reconcile, retryPending, startRetryLoop, uploadImage, isQurtUser, toPayload };
+/**
+ * OnDex'ga do'kon nomidan server-server so'rov (klient siri + do'kon egasining OnDex ID'si).
+ * Holat kodi bo'yicha qaror chaqiruvchiniki (`validateStatus` hammasini o'tkazadi);
+ * tarmoq xatosida istisno tashlaydi.
+ */
+function ondexCall(user, method, path, data) {
+  return axios.request({
+    method,
+    url: `${baseUrl()}${path}`,
+    data,
+    headers: authHeaders(user.ondexUserId),
+    timeout: TIMEOUT_MS,
+    validateStatus: () => true,
+  });
+}
+
+module.exports = { schedule, reconcile, retryPending, startRetryLoop, uploadImage, isQurtUser, toPayload, configured, ondexCall };
