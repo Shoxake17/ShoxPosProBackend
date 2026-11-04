@@ -1,4 +1,4 @@
-// tests/qurtOrdersStock.test.js — `node --test tests/`
+// tests/storeOrdersStock.test.js — `node --test tests/`
 //
 // Qurt buyurtmasini tasdiqlash/bekor qilishda OMBOR qoldig'i: haqiqiy Mongo (alohida vaqtincha
 // baza) bilan; OnDex javobi soxta. Mongo yo'q bo'lsa test o'tkazib yuboriladi.
@@ -18,7 +18,7 @@ process.env.SSO_CLIENT_SECRET = 'x'.repeat(40);
 
 const mongoose = require('mongoose');
 const qurtSync = require('../services/qurtSync');
-const qurtOrders = require('../services/qurtOrders');
+const storeOrders = require('../services/storeOrders');
 const Product = require('../models/Product');
 const QurtOrderLedger = require('../models/QurtOrderLedger');
 
@@ -75,7 +75,7 @@ const qty = async (barcode) => (await Product.collection.findOne({ login: LOGIN,
 test('tasdiqlash: qoldiq ayiriladi va ledger yoziladi', async (t) => {
   if (!mongoOk) return t.skip('Mongo yo\'q');
   await seed({ a: 10, b: 10 });
-  await qurtOrders.transition(USER, LOGIN, 'ord1', 'confirmed');
+  await storeOrders.transition(USER, LOGIN, 'ord1', 'confirmed');
   assert.equal(await qty('a'), 7);
   assert.equal(await qty('b'), 8);
   const led = await QurtOrderLedger.findOne({ orderId: 'ord1' }).lean();
@@ -87,7 +87,7 @@ test('tasdiqlash: qoldiq ayiriladi va ledger yoziladi', async (t) => {
 test('qoldiq yetmasa: tasdiqlanmaydi, hech narsa o\'zgarmaydi, OnDex\'ga so\'rov ketmaydi', async (t) => {
   if (!mongoOk) return t.skip('Mongo yo\'q');
   await seed({ a: 10, b: 1 }); // b da 2 kerak
-  await assert.rejects(qurtOrders.transition(USER, LOGIN, 'ord1', 'confirmed'),
+  await assert.rejects(storeOrders.transition(USER, LOGIN, 'ord1', 'confirmed'),
     (e) => e.status === 409 && e.code === 'out_of_stock');
   assert.equal(await qty('a'), 10, 'avval ayirilgan a qaytarilishi kerak');
   assert.equal(await qty('b'), 1);
@@ -99,7 +99,7 @@ test('OnDex rad etsa: ayirilgan qoldiq QAYTARILADI, ledger yo\'q', async (t) => 
   if (!mongoOk) return t.skip('Mongo yo\'q');
   await seed({ a: 10, b: 10 });
   transitionStatus = 409;
-  await assert.rejects(qurtOrders.transition(USER, LOGIN, 'ord1', 'confirmed'), (e) => e.status === 409);
+  await assert.rejects(storeOrders.transition(USER, LOGIN, 'ord1', 'confirmed'), (e) => e.status === 409);
   assert.equal(await qty('a'), 10);
   assert.equal(await qty('b'), 10);
   assert.equal(await QurtOrderLedger.countDocuments({}), 0);
@@ -109,30 +109,30 @@ test('allaqachon ko\'rib chiqilgan buyurtma qayta tasdiqlanmaydi (qoldiq ikki ma
   if (!mongoOk) return t.skip('Mongo yo\'q');
   await seed({ a: 10, b: 10 });
   order.status = 'confirmed';
-  await assert.rejects(qurtOrders.transition(USER, LOGIN, 'ord1', 'confirmed'), (e) => e.status === 409);
+  await assert.rejects(storeOrders.transition(USER, LOGIN, 'ord1', 'confirmed'), (e) => e.status === 409);
   assert.equal(await qty('a'), 10);
 });
 
 test('bekor qilinganda qoldiq aynan BIR MARTA qaytadi', async (t) => {
   if (!mongoOk) return t.skip('Mongo yo\'q');
   await seed({ a: 10, b: 10 });
-  await qurtOrders.transition(USER, LOGIN, 'ord1', 'confirmed');
+  await storeOrders.transition(USER, LOGIN, 'ord1', 'confirmed');
   assert.equal(await qty('a'), 7);
-  assert.equal(await qurtOrders.restoreForOrder('ord1'), true);
+  assert.equal(await storeOrders.restoreForOrder('ord1'), true);
   assert.equal(await qty('a'), 10);
   assert.equal(await qty('b'), 10);
-  assert.equal(await qurtOrders.restoreForOrder('ord1'), false, 'takroriy xabar qoldiqni qo\'shmasin');
+  assert.equal(await storeOrders.restoreForOrder('ord1'), false, 'takroriy xabar qoldiqni qo\'shmasin');
   assert.equal(await qty('a'), 10);
-  assert.equal(await qurtOrders.restoreForOrder('yoq-buyurtma'), false, 'tasdiqlanmagan buyurtma — hech narsa');
+  assert.equal(await storeOrders.restoreForOrder('yoq-buyurtma'), false, 'tasdiqlanmagan buyurtma — hech narsa');
 });
 
 test('rad etish va qadoqlash qoldiqqa tegmaydi; rad etishda sabab shart', async (t) => {
   if (!mongoOk) return t.skip('Mongo yo\'q');
   await seed({ a: 10, b: 10 });
-  await assert.rejects(qurtOrders.transition(USER, LOGIN, 'ord1', 'rejected', ''), (e) => e.status === 400);
-  await qurtOrders.transition(USER, LOGIN, 'ord1', 'rejected', 'Mahsulot tugagan');
+  await assert.rejects(storeOrders.transition(USER, LOGIN, 'ord1', 'rejected', ''), (e) => e.status === 400);
+  await storeOrders.transition(USER, LOGIN, 'ord1', 'rejected', 'Mahsulot tugagan');
   order.status = 'confirmed';
-  await qurtOrders.transition(USER, LOGIN, 'ord1', 'packed');
+  await storeOrders.transition(USER, LOGIN, 'ord1', 'packed');
   assert.equal(await qty('a'), 10);
   assert.equal(await qty('b'), 10);
 });
@@ -141,7 +141,7 @@ test('do\'kon faqat confirmed/rejected/packed ni o\'zgartira oladi', async (t) =
   if (!mongoOk) return t.skip('Mongo yo\'q');
   await seed({ a: 10, b: 10 });
   for (const to of ['collected', 'delivered', 'cancelled', 'out_for_delivery', 'new', '', undefined, '../x']) {
-    await assert.rejects(qurtOrders.transition(USER, LOGIN, 'ord1', to), (e) => e.status === 400, String(to));
+    await assert.rejects(storeOrders.transition(USER, LOGIN, 'ord1', to), (e) => e.status === 400, String(to));
   }
   assert.equal(calls.length, 0, 'OnDex\'ga so\'rov ketmasligi kerak');
 });
@@ -150,8 +150,8 @@ test('noto\'g\'ri ID — OnDex\'ga so\'rov yuborilmaydi', async (t) => {
   if (!mongoOk) return t.skip('Mongo yo\'q');
   await seed({ a: 10, b: 10 });
   for (const id of ['../admin', 'a/b', '', 'x'.repeat(80)]) {
-    await assert.rejects(qurtOrders.getOrder(USER, id), (e) => e.status === 404);
-    await assert.rejects(qurtOrders.transition(USER, LOGIN, id, 'packed'), (e) => e.status === 404);
+    await assert.rejects(storeOrders.getOrder(USER, id), (e) => e.status === 404);
+    await assert.rejects(storeOrders.transition(USER, LOGIN, id, 'packed'), (e) => e.status === 404);
   }
   assert.equal(calls.length, 0);
 });

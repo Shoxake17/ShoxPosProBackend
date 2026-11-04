@@ -164,7 +164,7 @@ const aiRoutes = require('./routes/aiRoutes')(csrfProtection);
 const debtsRoutes = require('./routes/debts')(csrfProtection);
 const salesRoutes = require('./routes/salesRoutes')(csrfProtection);
 const ondexAuthRouter = require('./routes/ondexAuth')(csrfProtection);
-const qurtOrdersRoutes = require('./routes/qurtOrders')(csrfProtection);
+const storeOrdersRoutes = require('./routes/storeOrders')(csrfProtection);
 const adminRoutes = require('./routes/adminRoutes')(csrfProtection);
 const pharmacyRoutes = require('./routes/pharmacyRoutes')(csrfProtection);
 const telegramRoutes = require('./routes/telegramRoutes')(csrfProtection);
@@ -195,7 +195,7 @@ if (!require('./services/ondexSso').isConfigured()) {
 app.use('/api', aiRoutes);
 app.use('/api/chat', userChatRoutes.router);
 app.use('/api/printer', printerRoutes);
-app.use('/api', qurtOrdersRoutes);
+app.use('/api', storeOrdersRoutes);
 app.use('/api/products', loginProductRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api', scanProductsRouter);

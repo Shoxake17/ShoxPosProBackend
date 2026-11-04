@@ -42,9 +42,10 @@ const QURT_ALLOW = [
   // Mahsulot qo'shish, mahsulotlar bazasi, kirim bazasi
   /^\/products(\/|$)/,
   // Qurt buyurtmalari (OnDex'dan keladi; webhook ham shu yo'lda)
-  /^\/qurt-orders(\/|$)/,
-  /^\/qurt-couriers(\/|$)/,
-  /^\/qurt-assign$/,
+  /^\/store-orders(\/|$)/,
+  /^\/qurt-orders\/webhook$/, // OnDex imzolangan webhook'i: tashqi shartnoma, manzili o'zgarmaydi
+  /^\/store-couriers(\/|$)/,
+  /^\/store-assign$/,
   // Sotuvlar, savdo statistikasi
   /^\/sales(\/|$)/, /^\/sold-buckets(\/|$)/,
   // Qarzlar

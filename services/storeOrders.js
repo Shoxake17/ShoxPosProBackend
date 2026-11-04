@@ -1,4 +1,4 @@
-// services/qurtOrders.js
+// services/storeOrders.js
 'use strict';
 
 /**
@@ -25,7 +25,7 @@ const STATUSES = ['new', 'confirmed', 'rejected', 'packed', 'collected', 'out_fo
 const STORE_TARGETS = ['confirmed', 'rejected', 'packed'];
 const MAX_REASON = 200;
 
-class QurtOrderError extends Error {
+class StoreOrderError extends Error {
   constructor(status, message, code) {
     super(message);
     this.status = status;
@@ -39,7 +39,7 @@ function parseStatuses(raw) {
   if (raw === undefined || raw === '') return [];
   const list = String(raw).split(',').map((s) => s.trim()).filter(Boolean);
   if (list.length > STATUSES.length || list.some((s) => !STATUSES.includes(s))) {
-    throw new QurtOrderError(400, "Noma'lum holat");
+    throw new StoreOrderError(400, "Noma'lum holat");
   }
   return list;
 }
@@ -48,21 +48,21 @@ function parseStatuses(raw) {
 function fromOndex(res) {
   const msg = res && res.data && typeof res.data.error === 'string' ? res.data.error : null;
   switch (res.status) {
-    case 400: return new QurtOrderError(400, msg || "So'rov noto'g'ri");
-    case 404: return new QurtOrderError(404, msg || 'Topilmadi');
-    case 409: return new QurtOrderError(409, msg || "Buyurtma holatini o'zgartirib bo'lmaydi (boshqa joyda o'zgargan bo'lishi mumkin)");
-    case 403: case 401: return new QurtOrderError(403, "Bu do'kon qurt buyurtmalarini boshqara olmaydi");
-    case 429: return new QurtOrderError(429, "Juda ko'p so'rov. Birozdan so'ng urinib ko'ring");
-    default: return new QurtOrderError(502, "OnDex bilan bog'lanib bo'lmadi. Keyinroq urinib ko'ring");
+    case 400: return new StoreOrderError(400, msg || "So'rov noto'g'ri");
+    case 404: return new StoreOrderError(404, msg || 'Topilmadi');
+    case 409: return new StoreOrderError(409, msg || "Buyurtma holatini o'zgartirib bo'lmaydi (boshqa joyda o'zgargan bo'lishi mumkin)");
+    case 403: case 401: return new StoreOrderError(403, "Bu do'kon qurt buyurtmalarini boshqara olmaydi");
+    case 429: return new StoreOrderError(429, "Juda ko'p so'rov. Birozdan so'ng urinib ko'ring");
+    default: return new StoreOrderError(502, "OnDex bilan bog'lanib bo'lmadi. Keyinroq urinib ko'ring");
   }
 }
 
 async function ondex(user, method, path, data) {
-  if (!qurtSync.configured()) throw new QurtOrderError(503, 'OnDex sozlanmagan');
+  if (!qurtSync.configured()) throw new StoreOrderError(503, 'OnDex sozlanmagan');
   try {
     return await qurtSync.ondexCall(user, method, path, data);
   } catch (e) {
-    throw new QurtOrderError(502, "OnDex bilan bog'lanib bo'lmadi. Keyinroq urinib ko'ring");
+    throw new StoreOrderError(502, "OnDex bilan bog'lanib bo'lmadi. Keyinroq urinib ko'ring");
   }
 }
 
@@ -76,7 +76,7 @@ async function listOrders(user, { status, limit } = {}) {
 }
 
 async function getOrder(user, id) {
-  if (!validId(id)) throw new QurtOrderError(404, 'Buyurtma topilmadi');
+  if (!validId(id)) throw new StoreOrderError(404, 'Buyurtma topilmadi');
   const res = await ondex(user, 'get', `/merchant/qurt/orders/${encodeURIComponent(id)}`);
   if (res.status !== 200) throw fromOndex(res);
   return res.data;
@@ -90,7 +90,7 @@ function itemsOf(order) {
     const barcode = typeof it.barcode === 'string' ? it.barcode : '';
     const qty = Number(it.qty);
     if (!barcode || !Number.isInteger(qty) || qty < 1) {
-      throw new QurtOrderError(409, "Buyurtmadagi mahsulot kaliti noto'g'ri — OnDex ma'muriga murojaat qiling");
+      throw new StoreOrderError(409, "Buyurtmadagi mahsulot kaliti noto'g'ri — OnDex ma'muriga murojaat qiling");
     }
     merged.set(barcode, (merged.get(barcode) || 0) + qty);
   }
@@ -109,7 +109,7 @@ async function decrementStock(Product, login, items) {
     if (res.matchedCount === 0) {
       await incrementStock(Product, login, done);
       const p = await Product.findOne({ login, barcode: it.barcode }).select('name quantity').lean();
-      throw new QurtOrderError(
+      throw new StoreOrderError(
         409,
         p
           ? `«${p.name}» omborda yetarli emas (bor: ${p.quantity}, kerak: ${it.qty}). Avval qoldiqni to'ldiring yoki buyurtmani rad eting`
@@ -139,11 +139,11 @@ function resync(login, items) {
  * buyurtmasi "topilmadi"); bu yerda faqat ruxsat etilgan nishon holatlar va ombor.
  */
 async function transition(user, login, id, to, reason) {
-  if (!validId(id)) throw new QurtOrderError(404, 'Buyurtma topilmadi');
-  if (!STORE_TARGETS.includes(to)) throw new QurtOrderError(400, "Bu holatni do'kon o'zgartira olmaydi");
+  if (!validId(id)) throw new StoreOrderError(404, 'Buyurtma topilmadi');
+  if (!STORE_TARGETS.includes(to)) throw new StoreOrderError(400, "Bu holatni do'kon o'zgartira olmaydi");
   const text = typeof reason === 'string' ? reason.trim() : '';
-  if (text.length > MAX_REASON) throw new QurtOrderError(400, `Sabab ko'pi bilan ${MAX_REASON} belgi`);
-  if (to === 'rejected' && text.length < 3) throw new QurtOrderError(400, 'Rad etish sababini yozing (kamida 3 belgi)');
+  if (text.length > MAX_REASON) throw new StoreOrderError(400, `Sabab ko'pi bilan ${MAX_REASON} belgi`);
+  if (to === 'rejected' && text.length < 3) throw new StoreOrderError(400, 'Rad etish sababini yozing (kamida 3 belgi)');
 
   const Product = require('../models/Product');
   const path = `/merchant/qurt/orders/${encodeURIComponent(id)}/transition`;
@@ -156,7 +156,7 @@ async function transition(user, login, id, to, reason) {
 
   // ── Tasdiqlash: ombor + OnDex ──
   const order = await getOrder(user, id);
-  if (order.status !== 'new') throw new QurtOrderError(409, "Buyurtma allaqachon ko'rib chiqilgan");
+  if (order.status !== 'new') throw new StoreOrderError(409, "Buyurtma allaqachon ko'rib chiqilgan");
   const items = itemsOf(order);
 
   const existing = await QurtOrderLedger.findOne({ orderId: id }).lean();
@@ -219,7 +219,7 @@ const NAME_MAX = 80;
 function cleanIds(ids) {
   if (ids === undefined || ids === null) return undefined;
   if (!Array.isArray(ids) || ids.length > 500 || !ids.every(validId)) {
-    throw new QurtOrderError(400, "Buyurtmalar ro'yxati noto'g'ri");
+    throw new StoreOrderError(400, "Buyurtmalar ro'yxati noto'g'ri");
   }
   return ids;
 }
@@ -233,49 +233,49 @@ async function listCouriers(user) {
 async function addCourier(user, { phone, name } = {}) {
   const p = typeof phone === 'string' ? phone.replace(/[\s()-]/g, '') : '';
   const n = typeof name === 'string' ? name.trim() : '';
-  if (!PHONE_RE.test(p)) throw new QurtOrderError(400, "Telefon raqami noto'g'ri");
-  if (n.length < 2 || n.length > NAME_MAX) throw new QurtOrderError(400, `Ism 2..${NAME_MAX} belgi bo'lsin`);
+  if (!PHONE_RE.test(p)) throw new StoreOrderError(400, "Telefon raqami noto'g'ri");
+  if (n.length < 2 || n.length > NAME_MAX) throw new StoreOrderError(400, `Ism 2..${NAME_MAX} belgi bo'lsin`);
   const res = await ondex(user, 'post', '/merchant/qurt/couriers', { phone: p, name: n });
   if (res.status !== 201) throw fromOndex(res);
   return res.data;
 }
 
 async function removeCourier(user, id) {
-  if (!validId(id)) throw new QurtOrderError(404, 'Kuryer topilmadi');
+  if (!validId(id)) throw new StoreOrderError(404, 'Kuryer topilmadi');
   const res = await ondex(user, 'delete', `/merchant/qurt/couriers/${encodeURIComponent(id)}`);
   if (res.status !== 204 && res.status !== 200) throw fromOndex(res);
 }
 
 async function assign(user, { courierId, date, orderIds } = {}) {
-  if (!validId(courierId)) throw new QurtOrderError(400, 'Kuryerni tanlang');
+  if (!validId(courierId)) throw new StoreOrderError(400, 'Kuryerni tanlang');
   const body = { courier_id: courierId };
   if (date !== undefined && date !== '') {
-    if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new QurtOrderError(400, "Sana noto'g'ri");
+    if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new StoreOrderError(400, "Sana noto'g'ri");
     body.date = date;
   }
   const ids = cleanIds(orderIds);
   if (ids) body.order_ids = ids;
-  if (!body.date && !body.order_ids) throw new QurtOrderError(400, 'Reys sanasi yoki buyurtmalarni ko\'rsating');
+  if (!body.date && !body.order_ids) throw new StoreOrderError(400, 'Reys sanasi yoki buyurtmalarni ko\'rsating');
   const res = await ondex(user, 'post', '/merchant/qurt/assign', body);
   if (res.status !== 200) throw fromOndex(res);
   return res.data;
 }
 
 async function unassign(user, orderId) {
-  if (!validId(orderId)) throw new QurtOrderError(404, 'Buyurtma topilmadi');
+  if (!validId(orderId)) throw new StoreOrderError(404, 'Buyurtma topilmadi');
   const res = await ondex(user, 'post', `/merchant/qurt/orders/${encodeURIComponent(orderId)}/unassign`);
   if (res.status !== 204 && res.status !== 200) throw fromOndex(res);
 }
 
 async function settle(user, courierId) {
-  if (!validId(courierId)) throw new QurtOrderError(404, 'Kuryer topilmadi');
+  if (!validId(courierId)) throw new StoreOrderError(404, 'Kuryer topilmadi');
   const res = await ondex(user, 'post', `/merchant/qurt/couriers/${encodeURIComponent(courierId)}/settle`, {});
   if (res.status !== 200) throw fromOndex(res);
   return res.data;
 }
 
 module.exports = {
-  QurtOrderError, validId, STATUSES, STORE_TARGETS,
+  StoreOrderError, validId, STATUSES, STORE_TARGETS,
   listOrders, getOrder, transition, restoreForOrder,
   listCouriers, addCourier, removeCourier, assign, unassign, settle,
   // sinov uchun

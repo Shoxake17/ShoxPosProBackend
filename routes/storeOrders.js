@@ -1,4 +1,4 @@
-// routes/qurtOrders.js
+// routes/storeOrders.js
 'use strict';
 
 const express = require('express');
@@ -7,17 +7,17 @@ const config = require('../config');
 const User = require('../models/User');
 const verifyToken = require('../middleware/verifyToken');
 const qurtSync = require('../services/qurtSync');
-const qurtOrders = require('../services/qurtOrders');
+const storeOrders = require('../services/storeOrders');
 const qurtWebhook = require('../services/qurtWebhook');
 
-const { QurtOrderError } = qurtOrders;
+const { StoreOrderError } = storeOrders;
 
 /** Xatoni javobga aylantiradi: kutilgan xatolar o'z matni bilan, boshqalar umumiy xabar bilan. */
 function fail(res, err) {
-  if (err instanceof QurtOrderError) {
+  if (err instanceof StoreOrderError) {
     return res.status(err.status).json({ success: false, message: err.message, ...(err.code ? { code: err.code } : {}) });
   }
-  console.error('⚠️ [qurt-orders]', err && err.message);
+  console.error('⚠️ [store-orders]', err && err.message);
   return res.status(500).json({ success: false, message: 'Server xatosi' });
 }
 
@@ -44,12 +44,12 @@ async function pushNewOrder(owner, orderId, number) {
       body: `№ ${number} — qabul qilish uchun oching`,
       icon: '/ondexmerchant-192.png',
       badge: '/ondexmerchant-192.png',
-      tag: `qurt-${orderId}`,
+      tag: `order-${orderId}`,
       url: '/orders',
     });
     if (result === 'expired') await User.updateOne({ login: owner.login }, { pushSubscription: null });
   } catch (e) {
-    console.error('⚠️ [qurt-orders push]', e && e.message);
+    console.error('⚠️ [store-orders push]', e && e.message);
   }
 }
 
@@ -80,7 +80,7 @@ module.exports = (csrfProtection) => {
     const b = req.body || {};
     const str = (v, max) => typeof v === 'string' && v.length > 0 && v.length <= max;
     if (!str(b.event_id, 160) || !['created', 'cancelled'].includes(b.event) ||
-        !qurtOrders.validId(b.order_id) || !qurtOrders.validId(b.store_id) || !str(b.number, 32)) {
+        !storeOrders.validId(b.order_id) || !storeOrders.validId(b.store_id) || !str(b.number, 32)) {
       return res.status(400).json({ success: false, message: "Xabar formati noto'g'ri" });
     }
     if (qurtWebhook.alreadySeen(b.event_id)) return res.status(204).end(); // takror — allaqachon ishlangan
@@ -90,27 +90,27 @@ module.exports = (csrfProtection) => {
       if (owner) {
         const socketApi = require('../socket');
         // Faqat KICHIK signal: tafsilotni panel o'zi (autentifikatsiya bilan) so'raydi.
-        socketApi.sendToUser(owner.login, 'qurtOrder', {
+        socketApi.sendToUser(owner.login, 'storeOrder', {
           event: b.event, orderId: b.order_id, number: b.number,
         });
         // Panel ochiq bo'lmasa (jonli ulanish yo'q) — tizim bildirishnomasi (Web Push).
         if (b.event === 'created' && owner.pushSubscription && !(socketApi.getUserSockets()[owner.login] || []).length) {
           await pushNewOrder(owner, b.order_id, b.number);
         }
-        if (b.event === 'cancelled') await qurtOrders.restoreForOrder(b.order_id);
+        if (b.event === 'cancelled') await storeOrders.restoreForOrder(b.order_id);
       }
       return res.status(204).end();
     } catch (e) {
       qurtWebhook.forget(b.event_id); // qayta yuborilsa qayta ishlansin
-      console.error('⚠️ [qurt-orders webhook]', e && e.message);
+      console.error('⚠️ [store-orders webhook]', e && e.message);
       return res.status(500).json({ success: false, message: 'Server xatosi' });
     }
   });
 
   // ── Do'kon paneli ──
-  router.get('/qurt-orders', verifyToken, requireQurtStore, async (req, res) => {
+  router.get('/store-orders', verifyToken, requireQurtStore, async (req, res) => {
     try {
-      const orders = await qurtOrders.listOrders(req.qurtUser, { status: req.query.status, limit: req.query.limit });
+      const orders = await storeOrders.listOrders(req.qurtUser, { status: req.query.status, limit: req.query.limit });
       res.set('Cache-Control', 'no-store');
       res.json({ success: true, orders });
     } catch (e) { fail(res, e); }
@@ -122,50 +122,50 @@ module.exports = (csrfProtection) => {
   };
   const mutate = [verifyToken, csrfProtection, requireQurtStore, transitionLimiter];
 
-  router.get('/qurt-couriers', verifyToken, requireQurtStore, wrap(async (req, res) => {
-    const couriers = await qurtOrders.listCouriers(req.qurtUser);
+  router.get('/store-couriers', verifyToken, requireQurtStore, wrap(async (req, res) => {
+    const couriers = await storeOrders.listCouriers(req.qurtUser);
     res.set('Cache-Control', 'no-store');
     res.json({ success: true, couriers });
   }));
 
-  router.post('/qurt-couriers', ...mutate, wrap(async (req, res) => {
-    const courier = await qurtOrders.addCourier(req.qurtUser, req.body || {});
+  router.post('/store-couriers', ...mutate, wrap(async (req, res) => {
+    const courier = await storeOrders.addCourier(req.qurtUser, req.body || {});
     res.status(201).json({ success: true, courier });
   }));
 
-  router.delete('/qurt-couriers/:id', ...mutate, wrap(async (req, res) => {
-    await qurtOrders.removeCourier(req.qurtUser, req.params.id);
+  router.delete('/store-couriers/:id', ...mutate, wrap(async (req, res) => {
+    await storeOrders.removeCourier(req.qurtUser, req.params.id);
     res.json({ success: true });
   }));
 
-  router.post('/qurt-couriers/:id/settle', ...mutate, wrap(async (req, res) => {
-    const result = await qurtOrders.settle(req.qurtUser, req.params.id);
+  router.post('/store-couriers/:id/settle', ...mutate, wrap(async (req, res) => {
+    const result = await storeOrders.settle(req.qurtUser, req.params.id);
     res.json({ success: true, result });
   }));
 
-  router.post('/qurt-assign', ...mutate, wrap(async (req, res) => {
+  router.post('/store-assign', ...mutate, wrap(async (req, res) => {
     const b = req.body || {};
-    const result = await qurtOrders.assign(req.qurtUser, { courierId: b.courierId, date: b.date, orderIds: b.orderIds });
+    const result = await storeOrders.assign(req.qurtUser, { courierId: b.courierId, date: b.date, orderIds: b.orderIds });
     res.json({ success: true, result });
   }));
 
-  router.post('/qurt-orders/:id/unassign', ...mutate, wrap(async (req, res) => {
-    await qurtOrders.unassign(req.qurtUser, req.params.id);
+  router.post('/store-orders/:id/unassign', ...mutate, wrap(async (req, res) => {
+    await storeOrders.unassign(req.qurtUser, req.params.id);
     res.json({ success: true });
   }));
 
-  router.get('/qurt-orders/:id', verifyToken, requireQurtStore, async (req, res) => {
+  router.get('/store-orders/:id', verifyToken, requireQurtStore, async (req, res) => {
     try {
-      const order = await qurtOrders.getOrder(req.qurtUser, req.params.id);
+      const order = await storeOrders.getOrder(req.qurtUser, req.params.id);
       res.set('Cache-Control', 'no-store');
       res.json({ success: true, order });
     } catch (e) { fail(res, e); }
   });
 
-  router.post('/qurt-orders/:id/transition', verifyToken, csrfProtection, requireQurtStore, transitionLimiter, async (req, res) => {
+  router.post('/store-orders/:id/transition', verifyToken, csrfProtection, requireQurtStore, transitionLimiter, async (req, res) => {
     try {
       const body = req.body || {};
-      const order = await qurtOrders.transition(req.qurtUser, req.user.login, req.params.id, body.to, body.reason);
+      const order = await storeOrders.transition(req.qurtUser, req.user.login, req.params.id, body.to, body.reason);
       res.json({ success: true, order });
     } catch (e) { fail(res, e); }
   });
