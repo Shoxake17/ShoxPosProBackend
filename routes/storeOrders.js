@@ -53,6 +53,10 @@ async function pushNewOrder(owner, orderId, number) {
   }
 }
 
+/** OnDex yuboradigan voqealar: buyurtmaning har bir o'zgarishi (panel jonli yangilanadi). */
+const WEBHOOK_EVENTS = ['created', 'confirmed', 'rejected', 'packed', 'collected', 'out_for_delivery', 'delivered',
+  'failed', 'cancelled', 'assigned', 'unassigned', 'cash_settled'];
+
 module.exports = (csrfProtection) => {
   const router = express.Router();
 
@@ -79,7 +83,7 @@ module.exports = (csrfProtection) => {
 
     const b = req.body || {};
     const str = (v, max) => typeof v === 'string' && v.length > 0 && v.length <= max;
-    if (!str(b.event_id, 160) || !['created', 'cancelled'].includes(b.event) ||
+    if (!str(b.event_id, 160) || !WEBHOOK_EVENTS.includes(b.event) ||
         !storeOrders.validId(b.order_id) || !storeOrders.validId(b.store_id) || !str(b.number, 32)) {
       return res.status(400).json({ success: false, message: "Xabar formati noto'g'ri" });
     }
@@ -91,7 +95,7 @@ module.exports = (csrfProtection) => {
         const socketApi = require('../socket');
         // Faqat KICHIK signal: tafsilotni panel o'zi (autentifikatsiya bilan) so'raydi.
         socketApi.sendToUser(owner.login, 'storeOrder', {
-          event: b.event, orderId: b.order_id, number: b.number,
+          event: b.event, orderId: b.order_id, number: b.number, status: typeof b.status === 'string' ? b.status : undefined,
         });
         // Panel ochiq bo'lmasa (jonli ulanish yo'q) — tizim bildirishnomasi (Web Push).
         if (b.event === 'created' && owner.pushSubscription && !(socketApi.getUserSockets()[owner.login] || []).length) {
