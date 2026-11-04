@@ -45,7 +45,7 @@ async function pushNewOrder(owner, orderId, number) {
       icon: '/ondexmerchant-192.png',
       badge: '/ondexmerchant-192.png',
       tag: `qurt-${orderId}`,
-      url: '/qurt-orders',
+      url: '/orders',
     });
     if (result === 'expired') await User.updateOne({ login: owner.login }, { pushSubscription: null });
   } catch (e) {
