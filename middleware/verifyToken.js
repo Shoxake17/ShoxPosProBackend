@@ -37,6 +37,16 @@ module.exports = async function verifyToken(req, res, next) {
       });
     }
 
+    // 3a. ShoxPos'da admin roli YO'Q (admin — faqat OnDex platform realmida).
+    // Ochiq qolgan eski admin sessiyasi ham shu yerda to'xtaydi: aks holda
+    // marshrutlardagi `role === 'admin'` istisnolari begona do'kon ma'lumotini ochardi.
+    if (decoded.role === 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: "Bu hisob uchun kirish yopilgan. OnDex administratsiyasiga murojaat qiling."
+      });
+    }
+
     // 4. Foydalanuvchi ma'lumotlarini request obyektiga biriktirish
     // Faqat kerakli (biznes mantiq uchun lozim bo'lgan) fieldlarni qo'shamiz
     req.user = {

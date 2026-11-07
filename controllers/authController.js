@@ -330,114 +330,7 @@ exports.kickDevice = async (req, res) => {
   }
 };
 
-exports.register = async (req, res) => {
-  try {
-    // Do'kon hisobini ADMIN ochadi: hamkorning OnDex telefonini kiritadi.
-    // Hamkor OnDex orqali birinchi marta kirganda hisob unga ulanadi
-    // (`routes/ondexAuth.js`). Parol yo'q.
-    const phone    = normalizePhone(sanitizeString(req.body.ondexPhone, 'ondexPhone'));
-    const shopName = sanitizeString(req.body.shopName, 'shopName');
-    const shopType  = sanitizeString(req.body.shopType, 'shopType');
-    const shopCategories = req.body.shopCategories || [];
-    //  Admin faqat bitta bo'lishi kerak. Yangi qo'shiladiganlar faqat 'cashier' bo'ladi.
-    const role     = 'cashier';
-
-    // O'zbekiston raqami: 998 + 9 raqam
-    if (!/^998\d{9}$/.test(phone)) {
-      return res.status(400).json({ message: "OnDex telefon raqami noto'g'ri (+998 XX XXX XX XX)" });
-    }
-
-    // `login` — do'konning ASOSIY kaliti (mahsulot, sotuv shunga bog'langan).
-    // Telefon raqamidan olinadi va keyin o'zgarmaydi.
-    const login = phone;
-    const exists = await User.findOne({ $or: [{ login: { $eq: login } }, { ondexPhone: { $eq: phone } }] });
-    if (exists) return res.status(409).json({ message: "Bu raqam bilan do'kon allaqachon ochilgan" });
-
-    // 7 kunlik bepul pro rejasi
-    const trialEndDate = new Date();
-    trialEndDate.setDate(trialEndDate.getDate() + 7);
-
-    const newUser = new User({
-      login,
-      ondexPhone: phone,
-      role,
-      shopName,
-      shopType,
-      shopCategories,
-      subscription: {
-        plan: 'pro',
-        trialEndDate,
-        isTrial: true,
-        startDate: new Date()
-      }
-    });
-    await newUser.save();
-    if (shopCategories.length > 0) {
-      await ShopType.findOneAndUpdate(
-      { value: shopType },
-      { $addToSet: { categories: { $each: shopCategories } } },
-      { upsert: true }
-    );
-    }
-    await AuditService.logUserAction({ login, action: 'REGISTER', status: 'SUCCESS' });
-
-    return res.status(201).json({
-      success: true,
-      user: {
-        login,
-        ondexPhone: phone,
-        role,
-        subscription: newUser.subscription
-      }
-    });
-  } catch (err) {
-    return res.status(500).json({ message: "Server xatosi" });
-  }
-};
-
-exports.updateUserCategories = async (req, res) => {
-  try {
-    const login          = sanitizeString(req.body.login, 'login').toLowerCase();
-    const shopCategories = req.body.shopCategories;
-    const shopType       = req.body.shopType ? sanitizeString(req.body.shopType, 'shopType') : null;
- 
-    if (!Array.isArray(shopCategories)) {
-      return res.status(400).json({ message: "shopCategories massiv bo'lishi kerak" });
-    }
- 
-    const updateData = { shopCategories };
-    if (shopType) updateData.shopType = shopType;
- 
-    const user = await User.findOneAndUpdate(
-      { login: { $eq: login } },
-      { $set: updateData },
-      { new: true }
-    );
- 
-    if (!user) return res.status(404).json({ message: "Foydalanuvchi topilmadi" });
- 
-    // ShopType kolleksiyasiga ham yangi kategoriyalarni qo'shish
-    if (shopCategories.length > 0 && (shopType || user.shopType)) {
-      await ShopType.findOneAndUpdate(
-        { value: shopType || user.shopType },
-        { $addToSet: { categories: { $each: shopCategories } } },
-        { upsert: true }
-      );
-    }
- 
-    return res.json({
-      success: true,
-      message: "Kategoriyalar yangilandi",
-      user: {
-        login:          user.login,
-        shopType:       user.shopType,
-        shopCategories: user.shopCategories,
-      }
-    });
-  } catch (err) {
-    return res.status(500).json({ message: "Server xatosi" });
-  }
-};
+// register, updateUserCategories OLIB TASHLANDI: akkaunt va do'kon turi OnDex identity'da.
 
 exports.logout = async (req, res) => {
   try {
@@ -473,272 +366,53 @@ exports.logout = async (req, res) => {
   }
 };
 
-// ====================================================================
-// ADMIN OPS
-// ====================================================================
-exports.isAdmin = (req, res, next) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ message: "Admin emas" });
-  next();
-};
-
-// Foydalanuvchi holati (admin yoki o'zi)
+// Foydalanuvchi holati — FAQAT o'zi (login tokendan; so'rovdagi `login` e'tiborsiz).
+// To'liq yozuv EMAS: faqat holat maydonlari (avval qurilmalar, push obunalari
+// va boshqa ichki maydonlar ham ketardi).
 exports.userStatus = async (req, res) => {
   try {
-    const login = sanitizeString(req.query.login, 'login');
-    if (!login) return res.status(400).json({ error: 'Login kerak' });
-
-    const safeLogin = login.toLowerCase();
-
-    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
-      return res.status(403).json({ error: "Ruxsat yo'q" });
-    }
-    
-    const user = await User.findOne({ login: { $eq: safeLogin } }).select('-password');
+    const user = await User.findOne({ login: { $eq: req.user.login } }).select('login blocked active isDeleted').lean();
     if (!user) return res.status(404).json({ error: 'Foydalanuvchi topilmadi' });
-    res.json(user);
+    res.json({ login: user.login, blocked: Boolean(user.blocked), active: Boolean(user.active), deleted: Boolean(user.isDeleted) });
   } catch (err) {
     res.status(500).json({ error: 'Server xatosi' });
   }
 };
 
-// Foydalanuvchini aktivlashtirish (admin)
-exports.activateUser = async (req, res) => {
-  try {
-    const login = sanitizeString(req.body.login, 'login');
-    if (!login) return res.status(400).json({ message: 'Login kerak' });
-
-    const safeLogin = login.toLowerCase();
-
-    const user = await User.findOneAndUpdate(
-      { login: { $eq: safeLogin } },
-      { blocked: false, active: true },
-      { returnDocument: 'after' }
-    );
-    if (!user) return res.status(404).json({ message: 'Foydalanuvchi topilmadi!' });
-
-    sendToUser(safeLogin, 'userActivated', null);
-
-    res.json({ message: "Foydalanuvchi blokdan chiqarildi va aktiv qilindi." });
-  } catch (err) {
-    res.status(500).json({ message: 'Server xatosi' });
-  }
-};
-
-// Foydalanuvchini bloklash (admin)
-exports.blockUser = async (req, res) => {
-  try {
-    const login = sanitizeString(req.body.login, 'login');
-    if (!login) return res.status(400).json({ message: 'Login kerak' });
-
-    const safeLogin = login.toLowerCase();
-
-    const user = await User.findOneAndUpdate(
-      { login: { $eq: safeLogin } },
-      { blocked: true, active: false },
-      { returnDocument: 'after' }
-    );
-    if (!user) return res.status(404).json({ message: 'Foydalanuvchi topilmadi!' });
-
-    sendToUser(safeLogin, 'forceLogout', { reason: 'Administrator tomonidan bloklandi' });
-
-    res.json({ message: 'Foydalanuvchi bloklandi.' });
-  } catch (err) {
-    res.status(500).json({ message: 'Server xatosi' });
-  }
-};
-
-// Faol foydalanuvchilar (admin)
-exports.activeUsers = async (req, res) => {
-  try {
-    const users = await User.find({}).select('-password');
-    res.json(users);
-  } catch (err) {
-    res.status(500).json({ message: 'Server xatosi' });
-  }
-};
-
-// Sessiya holati tekshiruvi
-exports.checkStatus = async (req, res) => {
-  try {
-    const login = sanitizeString(req.body.login, 'login');
-    const deviceId = sanitizeDeviceId(req.body.deviceId);
-    
-    if (!login || !deviceId) {
-      return res.status(400).json({ active: false, reason: 'Login va deviceId kerak' });
-    }
-
-    const safeLogin = login.toLowerCase();
-
-    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
-      return res.status(403).json({ active: false, reason: "Ruxsat yo'q" });
-    }
-    
-    const user = await User.findOne({ login: { $eq: safeLogin } });
-    if (!user)        return res.json({ active: false, reason: 'Foydalanuvchi topilmadi' });
-    if (user.blocked) return res.json({ active: false, reason: 'Siz bloklangansiz!' });
-    if (user.desktopDeviceId !== deviceId && user.mobileDeviceId !== deviceId) {
-      return res.json({ active: false, reason: "Noto'g'ri sessiya!" });
-    }
-    return res.json({ active: user.active });
-  } catch (err) {
-    res.status(500).json({ active: false, reason: 'Server xatosi' });
-  }
-};
-
-// Foydalanuvchi ma'lumotlarini qaytarish (me)
+// Foydalanuvchi ma'lumotlarini qaytarish (me). Obuna rejasi YO'Q — u OnDex'da.
 exports.getMe = async (req, res) => {
   try {
-    // verifyToken middleware'dan kelgan req.user.id orqali topamiz
-    const user = await User.findById(req.user.id).select('-password'); 
-    
+    const user = await User.findById(req.user.id).select('-password').lean();
     if (!user) {
       return res.status(404).json({ success: false, message: 'Foydalanuvchi topilmadi' });
     }
 
-    // Effektif kategoriyalarni aniqlash
     let effectiveCategories = user.shopCategories || [];
     if (effectiveCategories.length === 0 && user.shopType) {
       const typeData = await ShopType.findOne({ value: user.shopType });
-      if (typeData) {
-        effectiveCategories = typeData.categories;
-      }
-    }
-
-    // Tekshiramiz: trial muddati tugaganmi?
-    let currentUser = user.toObject();
-    if (currentUser.subscription?.isTrial && currentUser.subscription?.trialEndDate) {
-      const now = new Date();
-      if (now > new Date(currentUser.subscription.trialEndDate)) {
-        // Trial tugagan, free rejaga o'tkazamiz
-        currentUser.subscription.plan = 'free';
-        currentUser.subscription.isTrial = false;
-        // DB'ga saqlaymiz
-        await User.updateOne(
-          { _id: user._id },
-          {
-            $set: {
-              'subscription.plan': 'free',
-              'subscription.isTrial': false
-            }
-          }
-        );
-      }
+      if (typeData) effectiveCategories = typeData.categories;
     }
 
     res.status(200).json({
       success: true,
       user: {
-        id: currentUser._id,
-        login: currentUser.login,
-        role: currentUser.role,
-        name: currentUser.name,
-        shopName: currentUser.shopName,
-        shopType: currentUser.shopType,
-        storeCategory: currentUser.ondexStoreCategory || '',
+        id: user._id,
+        login: user.login,
+        role: user.role,
+        name: user.name,
+        shopName: user.shopName,
+        shopType: user.shopType,
+        storeCategory: user.ondexStoreCategory || '',
         shopCategories: effectiveCategories,
         activeDevice: req.user.deviceId,
-        subscription: currentUser.subscription
-      }
+      },
     });
   } catch (err) {
     res.status(500).json({ success: false, message: 'Server xatosi' });
   }
 };
 
-exports.getShopTypes = async (req, res) => {
-  try {
-    let types = await ShopType.find({});
-    
-    //  SEED & FIX: Barcha so'ralgan do'kon turlari va default kategoriyalar
-    const initialTypes = [
-      { 
-        value: "food", label: "Oziq-ovqat va Supermarketlar", icon: "🛒",
-        categories: ["Don va un", "Go'sht", "Sabzavot", "Mevalar", "Ichimliklar", "Yog'", "Sut mahsulotlari", "Qandolat mahsulotlari"]
-      },
-      { 
-        value: "auto_parts", label: "Avtomobil moylari va Ehtiyot qismlari", icon: "🔧",
-        categories: ["Dvigatel moylari", "Filtrlar", "Akkumulyatorlar", "Shinalar", "Ehtiyot qismlar"]
-      },
-      { 
-        value: "electronics", label: "Maishiy texnika va Elektronika do'konlari", icon: "📺",
-        categories: ["Telefonlar", "Kompyuterlar", "Televizorlar", "Oshxona texnikasi", "Sovutgichlar"]
-      },
-      { 
-        value: "construction", label: "Qurilish mollari va Xo'jalik do'konlari", icon: "🏗️",
-        categories: ["G'isht", "Eshik va derazalar", "Bo'yoqlar", "Santexnika", "Elektr materiallari"]
-      },
-      { 
-        value: "clothing", label: "Kiyim-kechak va Poyabzal do'konlari", icon: "👗",
-        categories: ["Erkaklar kiyimi", "Ayollar kiyimi", "Bolalar kiyimi", "Poyabzal", "Aksessuarlar"]
-      },
-      { 
-        value: "perfumery", label: "Parfumeriya va Kosmetika do'konlari", icon: "🌸",
-        categories: ["Atirlar", "Makiyaj", "Teri parvarishi", "Gigiyena vositalari"]
-      },
-      { 
-        value: "dorixona", label: "Dorixonalar", icon: "💊",
-        categories: ["Dorilar", "Tibbiy jihozlar", "Vitaminlar", "Gigiyena vositalari"]
-      },
-    ];
-
-    // DB dagi ma'lumotlarni tekshirish va yetishmayotganlarini qo'shish yoki yangilash
-    for (const it of initialTypes) {
-      const exists = await ShopType.findOne({ value: it.value });
-      if (!exists) {
-        await ShopType.create(it);
-      } else {
-        // Label, Icon yoki Kategoriyalar yo'q bo'lsa/o'zgargan bo'lsa yangilash
-        let updated = false;
-        if (!exists.label || exists.label !== it.label) {
-          exists.label = it.label;
-          updated = true;
-        }
-        if (!exists.icon || exists.icon !== it.icon) {
-          exists.icon = it.icon;
-          updated = true;
-        }
-        // Faqat kategoriyalar bo'sh bo'lsa defaultlarni qo'shish
-        if (!exists.categories || exists.categories.length === 0) {
-          exists.categories = it.categories;
-          updated = true;
-        }
-        if (updated) await exists.save();
-      }
-    }
-    
-    // Yangilangan ro'yxatni olish
-    types = await ShopType.find({});
-
-    res.json(types);
-  } catch (err) {
-    res.status(500).json({ message: "Kategoriyalarni yuklashda xato" });
-  }
-};
-
-exports.addShopCategory = async (req, res) => {
-  try {
-    const { shopType, category, label, icon } = req.body;
-    if (!shopType || !category) {
-      return res.status(400).json({ message: "shopType va category kerak" });
-    }
-
-    const update = { $addToSet: { categories: category } };
-    if (label || icon) {
-      update.$set = {};
-      if (label) update.$set.label = label;
-      if (icon) update.$set.icon = icon;
-    }
-
-    const updated = await ShopType.findOneAndUpdate(
-      { value: shopType },
-      update,
-      { upsert: true, new: true }
-    );
-
-    res.json({ success: true, shopType: updated });
-  } catch (err) {
-    res.status(500).json({ message: "Kategoriya qo'shishda xato" });
-  }
-};
+// isAdmin, activateUser, blockUser, activeUsers, checkStatus, getShopTypes, addShopCategory
+// OLIB TASHLANDI: admin va foydalanuvchi boshqaruvi faqat OnDex platform realmida (ADR-002).
 
 module.exports = exports;

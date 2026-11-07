@@ -1,7 +1,16 @@
 /**
  * @file routes/auth.js
- * @description Autentifikatsiya, foydalanuvchi boshqaruvi va admin RBAC endpointlari
- * @version 2.2.0 - CSRF INSTANCE MUAMMOSI TUZATILDI
+ * @description OnDex Merchant web paneli sessiyasi (vaqtinchalik, A4 gacha).
+ *
+ * ┌─ NIMA QOLDI VA NEGA ──────────────────────────────────────────────────┐
+ * Kimlik, akkaunt, rol, do'kon turi va admin funksiyalari OnDex identity'ga
+ * o'tdi (ADR-002): bu yerdagi `register`, foydalanuvchini aktivlashtirish/
+ * bloklash, foydalanuvchilar CRUD, `shop-types`, admin rol berish OLIB TASHLANDI.
+ *
+ * Qolganlari — faqat panel sessiyasining o'zi (refresh, logout, holat,
+ * qurilmalar). A4 bosqichida bular ham markaziy sessiyaga (OIDC + BFF)
+ * almashtiriladi: docs/architecture/AUTH-PHASE-A.md (ChustApp).
+ * └───────────────────────────────────────────────────────────────────────┘
  */
 
 const express = require('express');
@@ -9,168 +18,65 @@ const authController = require('../controllers/authController');
 const User = require('../models/User');
 const ShopType = require('../models/ShopType');
 const verifyToken = require('../middleware/verifyToken');
-const { cacheMiddleware, invalidateUserCache, CACHE_TTL } = require('../middleware/redisCache');
-const { registerValidation, handleValidationErrors } = require('../middleware/validateAuth');
+const { cacheMiddleware, CACHE_TTL } = require('../middleware/redisCache');
 
-// ✅ Factory pattern: csrfProtection tashqaridan uzatiladi
 module.exports = (csrfProtection) => {
   const router = express.Router();
 
-  // ====================================
-  // 🔓 PUBLIC ENDPOINTS (CSRF'siz)
-  // ====================================
-
-/**
-   * @route POST /api/register
-   * @description Yangi foydalanuvchi ro'yxatdan o'tkazish (faqat admin)
-   * @access Protected (admin only)
-   */
-  router.post('/register', 
-    verifyToken, 
-    authController.isAdmin, 
-    csrfProtection, 
-    registerValidation, 
-    handleValidationErrors, 
-    authController.register
-  );
-
-  router.post(
-  '/update-user-categories',
-  verifyToken,
-  authController.isAdmin,
-  csrfProtection,
-  async (req, res) => {
-    try {
-      await authController.updateUserCategories(req, res);
-    } catch (error) {
-      console.error('❌ Update user categories error:', error);
-      res.status(500).json({ success: false, message: 'Kategoriyalarni yangilashda xato' });
-    }
-  }
-);
- 
-
-  /**
-   * @route GET /api/shop-types
-   * @description Do'kon turlari va kategoriyalarini yuklash
-   */
-  router.get('/shop-types', verifyToken, authController.getShopTypes);
-
-  router.post('/add-shop-category', verifyToken, authController.isAdmin, csrfProtection, authController.addShopCategory);
-
-
-  /**
-   * @route POST /api/refresh
-   * @description JWT tokenni yangilash (refresh token orqali)
-   * @access Public
-   */
+  /** POST /api/refresh — panel sessiyasi tokenini yangilash. */
   router.post('/refresh', async (req, res) => {
     try {
       await authController.refresh(req, res);
     } catch (error) {
       console.error('❌ Refresh route error:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Token yangilash xatosi'
-      });
+      res.status(500).json({ success: false, message: 'Token yangilash xatosi' });
     }
   });
 
-  // ====================================
-  // 🔒 PROTECTED ENDPOINTS (CSRF bilan)
-  // ====================================
-
-  /**
-   * @route POST /api/logout
-   * @description Foydalanuvchini tizimdan chiqarish
-   * @access Protected
-   */
+  /** POST /api/logout */
   router.post('/logout', verifyToken, csrfProtection, async (req, res) => {
     try {
       await authController.logout(req, res);
     } catch (error) {
       console.error('❌ Logout route error:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Logout xatosi'
-      });
+      res.status(500).json({ success: false, message: 'Logout xatosi' });
     }
   });
 
-  // ─── Foydalanuvchi holati ──────────────────────────────────────────────────
+  /** GET /api/user-status — o'z hisobining holati (bloklangan/o'chirilgan). */
   router.get('/user-status', verifyToken, authController.userStatus);
 
-  // ─── Foydalanuvchini aktivlashtirish (faqat admin) ────────────────────────
-  router.post('/activate-user', verifyToken, authController.isAdmin, csrfProtection, authController.activateUser);
-
-  // ─── Foydalanuvchini bloklash (faqat admin) ───────────────────────────────
-  router.post('/block-user', verifyToken, authController.isAdmin, csrfProtection, authController.blockUser);
-
-  // ─── Faol foydalanuvchilar (faqat admin) ──────────────────────────────────
-  router.get('/active-users', verifyToken, authController.isAdmin, authController.activeUsers);
-
-  // ─── Sessiya holati tekshiruvi ─────────────────────────────────────────────
-  router.post('/check-status', verifyToken, csrfProtection, authController.checkStatus);
-
-  // ====================================
-  // 💻 DEVICE MANAGEMENT
-  // ====================================
-
-  /**
-   * @route GET /api/user-devices
-   * @description Foydalanuvchining barcha qurilmalarini ko'rish
-   * @access Protected
-   */
+  /** GET /api/user-devices — o'z qurilmalari. */
   router.get('/user-devices', verifyToken, async (req, res) => {
     try {
       await authController.getUserDevices(req, res);
     } catch (error) {
       console.error('❌ Get user devices error:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Qurilmalarni yuklashda xato'
-      });
+      res.status(500).json({ success: false, message: 'Qurilmalarni yuklashda xato' });
     }
   });
 
-  /**
-   * @route POST /api/kick-device
-   * @description Qurilmani tizimdan chiqarish
-   * @access Protected
-   */
+  /** POST /api/kick-device — o'z qurilmasini chiqarish. */
   router.post('/kick-device', verifyToken, csrfProtection, async (req, res) => {
     try {
       await authController.kickDevice(req, res);
     } catch (error) {
       console.error('❌ Kick device error:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Qurilmani chiqarishda xato'
-      });
+      res.status(500).json({ success: false, message: 'Qurilmani chiqarishda xato' });
     }
   });
 
-  // ====================================
-  // 👑 ADMIN RBAC ENDPOINTS
-  // ====================================
-
-  /**
-   * @route GET /api/verify-session
-   * @description Joriy sessiyani tekshirish
-   * @access Protected
-   */
+  /** GET /api/verify-session — joriy sessiya va do'kon profili. */
   router.get('/verify-session', verifyToken, async (req, res) => {
     try {
       const user = await User.findOne({ login: req.user.login });
-      
+
       let effectiveCategories = user?.shopCategories || [];
       if (effectiveCategories.length === 0 && user?.shopType) {
         const typeData = await ShopType.findOne({ value: user.shopType });
-        if (typeData) {
-          effectiveCategories = typeData.categories;
-        }
+        if (typeData) effectiveCategories = typeData.categories;
       }
-      
+
       res.json({
         success: true,
         valid: true,
@@ -182,315 +88,29 @@ module.exports = (csrfProtection) => {
           shopType: user?.shopType,
           storeCategory: user?.ondexStoreCategory || '',
           shopCategories: effectiveCategories,
-          subscription: user?.subscription
-        }
+        },
       });
     } catch (error) {
       console.error('❌ Verify session error:', error);
-      res.status(500).json({
-        success: false,
-        valid: false,
-        message: 'Session tekshirish xatosi'
-      });
+      res.status(500).json({ success: false, valid: false, message: 'Session tekshirish xatosi' });
     }
   });
 
-  
-
+  /** GET /api/me */
   router.get('/me', verifyToken, cacheMiddleware(CACHE_TTL.MEDIUM), authController.getMe);
-  
-  // ====================================
-  // 👤 USER INFO ENDPOINTS
-  // ====================================
 
-  /**
-   * @route GET /api/users
-   * @description Barcha foydalanuvchilarni ko'rish (faqat admin)
-   * @access Admin only
-   */
-  router.get('/users', verifyToken, async (req, res) => {
-    try {
-      if (req.user.role !== 'admin') {
-        return res.status(403).json({
-          success: false,
-          message: "Ruxsat yo'q: faqat adminlar uchun"
-        });
-      }
-
-      const users = await User.find({})
-        .select('-password -twoFactorSecret')
-        .sort({ createdAt: -1 });
-
-      res.json({
-        success: true,
-        count: users.length,
-        users: users.map(user => ({
-          login: user.login,
-          role: user.role,
-          name: user.name,
-          email: user.email,
-          active: user.active,
-          blocked: user.blocked,
-          twoFactorEnabled: user.twoFactorEnabled,
-          devicesCount: user.devices?.length || 0,
-          lastLogin: user.lastLogin,
-          createdAt: user.createdAt
-        }))
-      });
-
-    } catch (err) {
-      console.error('❌ Get users error:', err);
-      res.status(500).json({
-        success: false,
-        message: 'Server xatosi'
-      });
-    }
-  });
-
-  /**
-   * @route GET /api/users/:login
-   * @description Foydalanuvchi ma'lumotlarini qaytaradi
-   * @access Protected
-   */
-  router.get('/users/:login', verifyToken, async (req, res) => {
-    try {
-      const { login } = req.params;
-
-      if (!login || typeof login !== 'string') {
-        return res.status(400).json({
-          success: false,
-          message: "Login majburiy va string bo'lishi kerak"
-        });
-      }
-
-      const normalizedLogin = login.trim().toLowerCase();
-
-      if (!User) {
-        console.error('❌ KRITIK XATO: User model yuklanmadi!');
-        return res.status(500).json({
-          success: false,
-          message: 'Server konfiguratsiya xatosi'
-        });
-      }
-
-      const user = await User.findOne({ login: normalizedLogin }).select('-password');
-
-      if (!user) {
-        console.warn(`❌ User topilmadi: "${normalizedLogin}"`);
-        return res.status(404).json({
-          success: false,
-          message: 'Foydalanuvchi topilmadi',
-          hint: "Loginni tekshiring yoki mavjud foydalanuvchilarni ko'ring"
-        });
-      }
-
-      // Ruxsat tekshirish
-      if (req.user.login !== normalizedLogin && req.user.role !== 'admin') {
-        return res.status(403).json({
-          success: false,
-          message: "Ruxsat yo'q: faqat o'z ma'lumotingizni ko'rishingiz mumkin"
-        });
-      }
-
-      // Biometrik holatini qurilma bo'yicha tekshirish
-      const deviceId = req.query.deviceId || req.headers['x-device-id'];
-      let biometricEnabled = false;
-      let currentDevice = null;
-
-      if (deviceId && user.devices && Array.isArray(user.devices)) {
-        const device = user.devices.find(d => d.deviceId === deviceId);
-        if (device) {
-          biometricEnabled = device.biometric?.enabled || false;
-          currentDevice = {
-            deviceId: device.deviceId,
-            deviceName: device.deviceName,
-            deviceType: device.deviceType,
-            lastActive: device.lastActive,
-            biometricEnabled: device.biometric?.enabled || false
-          };
-        }
-      }
-
-      const response = {
-        success: true,
-        user: {
-          login: user.login,
-          role: user.role,
-          name: user.name || null,
-          email: user.email || null,
-          phone: user.phone || null,
-          twoFactorEnabled: user.twoFactorEnabled || false,
-          biometricEnabled,
-          currentDevice,
-          blocked: user.blocked || false,
-          active: user.active || false,
-          createdAt: user.createdAt,
-          lastLogin: user.lastLogin || null,
-          ...(req.user.role === 'admin' && {
-            devices: user.devices?.map(d => ({
-              deviceId: d.deviceId,
-              deviceName: d.deviceName,
-              deviceType: d.deviceType,
-              lastActive: d.lastActive,
-              biometricEnabled: d.biometric?.enabled || false
-            })) || []
-          })
-        }
-      };
-
-      console.log(`✅ User ma'lumotlari yuklandi: ${normalizedLogin}`);
-      res.json(response);
-
-    } catch (err) {
-      console.error('❌ Get user error:', err);
-      res.status(500).json({
-        success: false,
-        message: 'Server xatosi',
-        error: process.env.NODE_ENV === 'production' ? 'Ichki xato' : err.message,
-        type: err.name
-      });
-    }
-  });
-
-  /**
-   * @route PUT /api/users/:login
-   * @description Foydalanuvchi ma'lumotlarini yangilash
-   * @access Protected (o'z ma'lumotini yoki admin)
-   */
-  router.put('/users/:login', verifyToken, csrfProtection, async (req, res) => {
-    try {
-      const { login } = req.params;
-      const normalizedLogin = login.trim().toLowerCase();
-
-      if (req.user.login !== normalizedLogin && req.user.role !== 'admin') {
-        return res.status(403).json({
-          success: false,
-          message: "Ruxsat yo'q"
-        });
-      }
-
-      const user = await User.findOne({ login: normalizedLogin });
-      if (!user) {
-        return res.status(404).json({
-          success: false,
-          message: 'Foydalanuvchi topilmadi'
-        });
-      }
-
-      const allowedFields = ['name', 'email', 'phone', 'firstName', 'lastName', 'phoneNumber', 'avatarUrl'];
-      const updates = {};
-      allowedFields.forEach(field => {
-        if (req.body[field] !== undefined) updates[field] = req.body[field];
-      });
-
-      if (req.user.role === 'admin' && req.body.role) {
-        updates.role = req.body.role;
-      }
-
-      Object.assign(user, updates);
-      await user.save();
-
-      res.json({
-        success: true,
-        message: "Ma'lumotlar yangilandi",
-        user: {
-          login: user.login,
-          name: user.name,
-          firstName: user.firstName, 
-          lastName: user.lastName,     
-          phoneNumber: user.phoneNumber, 
-          avatarUrl: user.avatarUrl,   
-          email: user.email,
-          phone: user.phone,
-          role: user.role
-        }
-      });
-
-    } catch (err) {
-      console.error('❌ Update user error:', err);
-      res.status(500).json({
-        success: false,
-        message: 'Server xatosi'
-      });
-    }
-  });
-
-  /**
-   * @route DELETE /api/users/:login
-   * @description Foydalanuvchini o'chirish (faqat admin)
-   * @access Admin only
-   */
-  router.delete('/users/:login', verifyToken, csrfProtection, async (req, res) => {
-    try {
-      if (req.user.role !== 'admin') {
-        return res.status(403).json({
-          success: false,
-          message: "Ruxsat yo'q: faqat adminlar uchun"
-        });
-      }
-
-      const { login } = req.params;
-      const normalizedLogin = login.trim().toLowerCase();
-
-      if (req.user.login === normalizedLogin) {
-        return res.status(400).json({
-          success: false,
-          message: "O'zingizni o'chira olmaysiz"
-        });
-      }
-
-      const user = await User.findOneAndDelete({ login: normalizedLogin });
-
-      if (!user) {
-        return res.status(404).json({
-          success: false,
-          message: 'Foydalanuvchi topilmadi'
-        });
-      }
-
-      console.log(`✅ Foydalanuvchi o'chirildi: ${normalizedLogin}`);
-      res.json({
-        success: true,
-        message: "Foydalanuvchi o'chirildi"
-      });
-
-    } catch (err) {
-      console.error('❌ Delete user error:', err);
-      res.status(500).json({
-        success: false,
-        message: 'Server xatosi'
-      });
-    }
-  });
-
-  // ====================================
-  // 🔍 HEALTH CHECK
-  // ====================================
-
-  /**
-   * @route GET /api/health
-   * @description Auth router health check
-   * @access Public
-   */
+  /** GET /api/health */
   router.get('/health', (req, res) => {
-    res.json({
-      success: true,
-      service: 'auth',
-      status: 'healthy',
-      timestamp: new Date().toISOString()
-    });
+    res.json({ success: true, service: 'auth', status: 'healthy', timestamp: new Date().toISOString() });
   });
 
-  // ====================================
-  // ❌ CSRF ERROR HANDLER
-  // ====================================
   router.use((err, req, res, next) => {
     if (err.code === 'EBADCSRFTOKEN') {
       console.error('❌ CSRF token xatosi:', req.method, req.path);
       return res.status(403).json({
         success: false,
         message: "CSRF token noto'g'ri yoki mavjud emas",
-        hint: 'Avval /api/csrf-token dan token oling'
+        hint: 'Avval /api/csrf-token dan token oling',
       });
     }
     next(err);

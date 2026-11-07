@@ -160,14 +160,11 @@ const authRouter = require('./routes/auth')(csrfProtection);
 const productRoutes = require('./routes/productRoutes')(csrfProtection);
 const loginProductRoutes = require('./routes/loginProducts')(csrfProtection);
 const scanProductsRouter = require('./routes/scanProducts')(csrfProtection);
-const aiRoutes = require('./routes/aiRoutes')(csrfProtection);
 const debtsRoutes = require('./routes/debts')(csrfProtection);
 const salesRoutes = require('./routes/salesRoutes')(csrfProtection);
 const ondexAuthRouter = require('./routes/ondexAuth')(csrfProtection);
 const storeOrdersRoutes = require('./routes/storeOrders')(csrfProtection);
-const adminRoutes = require('./routes/adminRoutes')(csrfProtection);
 const pharmacyRoutes = require('./routes/pharmacyRoutes')(csrfProtection);
-const telegramRoutes = require('./routes/telegramRoutes')(csrfProtection);
 const { router: metricsRouter } = require('./routes/metrics');
 // Socket ulanishi talab qiladigan routerlar
 const io = socketIo(server, {
@@ -176,11 +173,10 @@ const io = socketIo(server, {
 });
 initIO(io);
 
-const printerRoutes = require('./routes/printerRoutes')(io);
+// OLIB TASHLANDI (OnDex Merchant web, ADR-000/002): AI, ichki chat, admin, obuna,
+// Telegram userbot, server printer tekshiruvi — ular OnDex markaziy servislariga o'tdi.
 const userRoutes = require('./routes/userRoutes')(io);
-const userChatRoutes = require('./routes/userChatRoutes')(csrfProtection, io);
 const pushRoutes = require('./routes/pushRoutes');
-const subscriptionRoutes = require('./routes/subscriptionRoutes');
 
 // API Endpointlarni bog'lash
 app.use('/metrics', metricsRouter);
@@ -192,19 +188,13 @@ app.use('/api', authRouter);
 if (!require('./services/ondexSso').isConfigured()) {
     console.warn('⚠️  OnDex orqali kirish SOZLANMAGAN (ONDEX_API_URL, SSO_CLIENT_SECRET, SSO_REDIRECT_URI) — hech kim kira olmaydi.');
 }
-app.use('/api', aiRoutes);
-app.use('/api/chat', userChatRoutes.router);
-app.use('/api/printer', printerRoutes);
 app.use('/api', storeOrdersRoutes);
 app.use('/api/products', loginProductRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api', scanProductsRouter);
 app.use('/api', debtsRoutes);
 app.use('/api', salesRoutes);
-app.use('/api/admin', adminRoutes);
 app.use('/api/pharmacy', pharmacyRoutes);
-app.use('/api/subscription', subscriptionRoutes);
-app.use('/api', telegramRoutes);
 // ====================================
 // 🌐 CATCH-ALL (SPA SUPPORT)
 // ====================================

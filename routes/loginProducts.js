@@ -440,48 +440,7 @@ router.delete("/delete-product/:login/:barcode", verifyToken, csrfProtection, as
   }
 });
 
-// ====================================================================
-// POST /ai-query/:login
-// ====================================================================
-router.post("/ai-query/:login", verifyToken, csrfProtection, async (req, res) => {
-  let safeLogin;
-  try {
-    safeLogin = sanitizeLogin(req.params.login);
-
-    // 🛡️ A01: Broken Access Control
-    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
-      return res.status(403).json({ message: "Ruxsat etilmagan!" });
-    }
-  } catch (e) {
-    return res.status(400).json({ message: e.message });
-  }
-
-
-  const query = req.body.query;
-  if (!query || typeof query !== 'string') {
-    return res.status(400).json({ message: "query majburiy" });
-  }
-
-  // ✅ query faqat o'qiladi, DB'ga tushmaydi
-  const safeQuery = query.toLowerCase().trim();
-
-  try {
-    if (safeQuery.includes("mahsulotlar")) {
-      const products = await Product.find({ login: safeLogin }).lean();
-      return res.json({ type: 'products', data: products });
-    }
-
-    if (safeQuery.includes("sotilgan")) {
-      const products = await Product.find({ login: safeLogin, sold: { $gt: 0 } }).lean();
-      return res.json({ type: 'sold', data: products });
-    }
-
-    return res.json({ type: 'text', data: "Savolingizga mos ma'lumot topilmadi." });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Server xatosi" });
-  }
-});
+  // POST /ai-query OLIB TASHLANDI: AI — OnDex `assistant` servisida (ADR-000).
 
   return router;
 };

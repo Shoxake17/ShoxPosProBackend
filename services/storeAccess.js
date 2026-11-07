@@ -37,8 +37,7 @@ const QURT_ALLOW = [
   // Sessiya va hisob (kirish, chiqish, qurilmalar, profil, sozlamalar)
   /^\/csrf-token$/, /^\/refresh$/, /^\/logout$/, /^\/verify-session$/, /^\/me$/,
   /^\/user-status$/, /^\/user-devices$/, /^\/kick-device$/, /^\/health$/,
-  /^\/check-status$/, /^\/shop-types$/, /^\/add-shop-category$/,
-  /^\/users(\/|$)/, /^\/push(\/|$)/, /^\/subscription(\/|$)/, /^\/telegram(\/|$)/,
+  /^\/users\/profile$/, /^\/push(\/|$)/,
   // Mahsulot qo'shish, mahsulotlar bazasi, kirim bazasi
   /^\/products(\/|$)/,
   // Qurt buyurtmalari (OnDex'dan keladi; webhook ham shu yo'lda)
@@ -53,9 +52,7 @@ const QURT_ALLOW = [
 ];
 
 /** Ruxsat etilgan ro'yxat ichida ham YOPIQ qoladigan yo'llar. */
-const QURT_DENY = [
-  /^\/products\/ai-query(\/|$)/, // AI so'rovi
-];
+const QURT_DENY = [];
 
 /** Eskirgan (kategoriyasiz) token bilan ham ochiq: yangilash, chiqish, kirish. */
 const OUTDATED_EXEMPT = /^\/(refresh|logout|csrf-token|auth\/.*)$/;
@@ -93,7 +90,8 @@ function storeCategoryGuard(req, res, next) {
   // kategoriyani OnDex'dan oladi) va so'rovni qaytaradi; bo'sh sc ("") — cheklanmagan.
   // `/refresh`, `/logout`, `/csrf-token` va kirish yo'llari ISTISNO: aks holda
   // eski tokenli foydalanuvchi yangilana olmay, tizimdan chiqib ketardi.
-  if (decoded && decoded.sc === undefined && decoded.role !== 'admin' && !OUTDATED_EXEMPT.test(req.path)) {
+  // Admin uchun istisno YO'Q: ShoxPos'da admin roli endi yo'q (admin — faqat OnDex platform realmi).
+  if (decoded && decoded.sc === undefined && !OUTDATED_EXEMPT.test(req.path)) {
     return res.status(401).json({
       success: false,
       code: 'TOKEN_OUTDATED',

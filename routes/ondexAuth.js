@@ -124,8 +124,7 @@ async function resolveUser(identity) {
       return stale; // kategoriya/shopType `syncPartnerProfile` da (kirishdan keyin saqlanadi)
     }
 
-    const trial = new Date();
-    trial.setDate(trial.getDate() + 7);
+    // Obuna rejasi YOZILMAYDI: obuna/to'lov OnDex'da markazlashgan (ADR-000).
     try {
       return await User.create({
         login: phone,
@@ -137,7 +136,6 @@ async function resolveUser(identity) {
         ...partnerProfile(identity),
         name: identity.name || undefined,
         shopName: identity.entityName || identity.name || 'OnDex Merchant',
-        subscription: { plan: 'pro', trialEndDate: trial, isTrial: true, startDate: new Date() },
       });
     } catch (err) {
       // Parallel ikki kirish: ikkinchisi E11000 oladi — mavjud hisobni olamiz.
@@ -148,17 +146,8 @@ async function resolveUser(identity) {
     }
   }
 
-  const bootstrap = ondexSso.normalizePhone(config.BOOTSTRAP_ADMIN_PHONE);
-  if (bootstrap && bootstrap === phone && !(await User.exists({ role: 'admin' }))) {
-    return User.create({
-      login: phone,
-      role: 'admin',
-      ondexUserId: identity.userId,
-      ondexPhone: phone,
-      name: identity.name || 'Admin',
-      shopName: 'OnDex Merchant',
-    });
-  }
+  // Bootstrap ADMIN YO'Q: ShoxPos'da admin roli olib tashlandi — admin faqat
+  // OnDex platform realmida (ADR-002).
   return null;
 }
 
@@ -180,6 +169,9 @@ async function finishLogin(req, res, ondexToken, device) {
 
   const user = await resolveUser(identity);
   if (!user) return fail(res, 403, 'not_linked', MESSAGES.not_linked);
+  // Eski ShoxPos admin yozuvi KIRA OLMAYDI: admin roli olib tashlandi, aks holda
+  // marshrutlardagi qolgan `role === 'admin'` istisnolari begona do'kon ma'lumotini ochardi.
+  if (user.role === 'admin') return fail(res, 403, 'not_linked', MESSAGES.not_linked);
   if (user.isDeleted) return fail(res, 403, 'deleted', MESSAGES.deleted);
   if (user.blocked) return fail(res, 403, 'blocked', MESSAGES.blocked);
   if (!user.name && identity.name) user.name = identity.name;
