@@ -7,8 +7,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-for (const k of ['JWT_SECRET', 'JWT_REFRESH_SECRET', 'COOKIE_SECRET', 'ADMIN_DEVICE_ID',
-  'CLOUDINARY_CLOUD_NAME', 'CLOUDINARY_API_KEY', 'CLOUDINARY_API_SECRET', 'QR_SECRET_KEY']) {
+for (const k of ['JWT_SECRET', 'JWT_REFRESH_SECRET', 'COOKIE_SECRET', 'ADMIN_DEVICE_ID',  'QR_SECRET_KEY']) {
   process.env[k] = process.env[k] || 'test-' + k;
 }
 process.env.MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/shoxpos_qurt_logistics_unused'; // ulanilmaydi\nprocess.env.ONDEX_API_URL = 'http://127.0.0.1:9';

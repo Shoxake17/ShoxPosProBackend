@@ -111,6 +111,8 @@ module.exports = (deps = {}) => {
       }
       if (!user.name && identity.name) user.name = identity.name;
       syncPartnerProfile(user, identity);
+      // Profil rasmi — OnDex akkauntidan (markazlashgan; Cloudinary yo'q).
+      user.avatarUrl = typeof ui.picture === 'string' ? ui.picture : '';
       user.activeDevice = { deviceId: claims.sid, deviceType: 'web', deviceOS: 'browser', lastLogin: new Date() };
       await user.save();
 

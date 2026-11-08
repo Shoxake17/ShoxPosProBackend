@@ -30,7 +30,10 @@ async function onIdentity(ui, s) {
   if (identity.userId !== s.ondexSub) return false;
   if (user.ondexPartnerRole && !identity.partnerRole) return false; // hamkorlik olib tashlangan
   try {
-    if (syncPartnerProfile(user, identity)) await user.save();
+    const pic = typeof ui.picture === 'string' ? ui.picture : '';
+    const changed = syncPartnerProfile(user, identity) || (user.avatarUrl || '') !== pic;
+    user.avatarUrl = pic;
+    if (changed) await user.save();
   } catch {
     return false; // kategoriya aniqlanmadi — fail-closed
   }

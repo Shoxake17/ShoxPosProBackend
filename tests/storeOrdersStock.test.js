@@ -7,8 +7,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-for (const k of ['JWT_SECRET', 'JWT_REFRESH_SECRET', 'COOKIE_SECRET', 'ADMIN_DEVICE_ID',
-  'CLOUDINARY_CLOUD_NAME', 'CLOUDINARY_API_KEY', 'CLOUDINARY_API_SECRET', 'QR_SECRET_KEY']) {
+for (const k of ['JWT_SECRET', 'JWT_REFRESH_SECRET', 'COOKIE_SECRET', 'ADMIN_DEVICE_ID',  'QR_SECRET_KEY']) {
   process.env[k] = process.env[k] || 'test-' + k;
 }
 const DB = `shoxpos_qurt_orders_test_${process.pid}`;

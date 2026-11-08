@@ -135,6 +135,29 @@ async function deleteSession(accessToken, id) {
   throw new OidcError(res.status === 404 ? 'not_found' : 'unavailable', `sessions/delete: HTTP ${res.status}`);
 }
 
+/**
+ * Profil rasmini OnDex akkauntiga yuklaydi (markazlashgan, R2). ShoxPos
+ * rasmni o'zi SAQLAMAYDI (Cloudinary olib tashlandi) — foydalanuvchining
+ * o'z markaziy tokeni bilan OnDex'ga uzatadi va qaytgan manzilni ko'rsatadi.
+ */
+async function uploadAvatar(accessToken, { buffer, filename, mimetype }) {
+  const form = new FormData();
+  form.append('file', new Blob([buffer], { type: mimetype || 'application/octet-stream' }), filename || 'avatar.png');
+  let res;
+  try {
+    res = await fetch(`${backend()}/v2/me/avatar`, { method: 'PUT', body: form, redirect: 'manual',
+      headers: { Authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(15000) });
+  } catch (err) {
+    throw new OidcError('unavailable', `avatar: ${err.message}`);
+  }
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 200 && typeof data.picture === 'string') return data.picture;
+  if (res.status === 400) throw new OidcError('bad_image', data.error || 'rasm qabul qilinmadi');
+  if (res.status === 401) throw new OidcError('invalid', 'avatar: 401');
+  if (res.status === 429) throw new OidcError('rate', 'avatar: limit');
+  throw new OidcError('unavailable', `avatar: HTTP ${res.status}`);
+}
+
 // ── JWKS + JWT ──────────────────────────────────────────────────────────
 let jwksCache = { at: 0, keys: new Map() };
 
@@ -213,6 +236,6 @@ async function verifyLogoutToken(raw) {
 
 module.exports = {
   OidcError, isConfigured, newLoginParams, authorizeUrl, endSessionUrl, exchangeCode, refresh,
-  userinfo, revoke, listSessions, deleteSession, verifyIdToken, verifyLogoutToken, safeEqual,
+  userinfo, revoke, listSessions, deleteSession, uploadAvatar, verifyIdToken, verifyLogoutToken, safeEqual,
   _setJwksForTest,
 };

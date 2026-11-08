@@ -5,8 +5,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('crypto');
 
-for (const k of ['COOKIE_SECRET', 'MONGO_URI', 'ADMIN_DEVICE_ID', 'CLOUDINARY_CLOUD_NAME', 'CLOUDINARY_API_KEY',
-  'CLOUDINARY_API_SECRET', 'QR_SECRET_KEY']) {
+for (const k of ['COOKIE_SECRET', 'MONGO_URI', 'ADMIN_DEVICE_ID',  'QR_SECRET_KEY']) {
   process.env[k] = process.env[k] || 'test-' + k;
 }
 process.env.MONGO_URI = 'mongodb://127.0.0.1:1/x';

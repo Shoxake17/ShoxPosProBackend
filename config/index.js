@@ -41,10 +41,6 @@ const env = cleanEnv(process.env, {
   SOCKET_IO_ENABLED:      bool({ default: false }),
   SOCKET_IO_PORT:         num({ default: 3000 }),
 
-  // --- EXTERNAL SERVICES (Cloudinary) ---
-  CLOUDINARY_CLOUD_NAME:  str(),
-  CLOUDINARY_API_KEY:     str(),
-  CLOUDINARY_API_SECRET:  str(),
 
   // HMAC konfiguratsiyasi
   QR_SECRET_KEY: str({ desc: 'QR kod imzosini yaratish uchun maxfiy kalit' }),  

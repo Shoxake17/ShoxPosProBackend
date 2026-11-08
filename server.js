@@ -67,7 +67,7 @@ app.use(helmet({
             baseUri: ["'self'"],
             scriptSrc: ["'self'", 'https://cdn.jsdelivr.net'],
             styleSrc: ["'self'", "'unsafe-inline'"],
-            imgSrc: ["'self'", "data:", "https:", "blob:", "res.cloudinary.com"],
+            imgSrc: ["'self'", "data:", "https:", "blob:"],
             connectSrc: [
                 "'self'",
                 'ws:', 'wss:',
