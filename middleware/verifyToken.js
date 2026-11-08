@@ -1,89 +1,75 @@
 // middleware/verifyToken.js
 'use strict';
 
-const jwt = require('jsonwebtoken');
-const config = require('../config');
-const TokenBlacklistService = require('../services/tokenBlacklistService');
+/**
+ * Autentifikatsiya — OnDex markaziy sessiyasi orqali (A4c.4, BFF).
+ *
+ * ShoxPos o'z JWT'larini endi CHIQARMAYDI va TEKSHIRMAYDI. Brauzerda faqat
+ * HttpOnly sessiya cookie'si; u `BffSession` ga, u esa OnDex sessiyasiga
+ * bog'langan. Markazda yopilgan sessiya (chiqish, "Qurilmalar", parol
+ * almashishi, xodim bo'shatilishi) — back-channel orqali darhol, eng yomon
+ * holatda keyingi refresh'da (≤10 daqiqa) bu yerda ham tugaydi.
+ *
+ * `req.user` shakli avvalgidek: { id, login, role, deviceId } — marshrutlar
+ * o'zgarmaydi. `deviceId` = OnDex sessiya ID (`sid`).
+ */
+
+const bff = require('../services/bffSession');
+const User = require('../models/User');
+const { syncPartnerProfile } = require('../services/partnerProfile');
+const account = require('../services/merchantAccount');
 
 /**
- * 🛡️ Autentifikatsiya Middleware
- * Faqat HttpOnly Cookielar bilan ishlaydi (XSS dan himoyalangan)
+ * Refresh paytida kimlikni yangilash: do'kon kategoriyasi o'zgargan bo'lsa
+ * sessiyaga yoziladi; hamkorlik olib tashlangan / hisob bloklangan — sessiya yopiladi.
  */
-module.exports = async function verifyToken(req, res, next) {
+async function onIdentity(ui, s) {
+  const user = await User.findById(s.userId);
+  if (account.denyReason(user)) return false;
+  const identity = account.identityFromUserinfo(ui);
+  if (identity.userId !== s.ondexSub) return false;
+  if (user.ondexPartnerRole && !identity.partnerRole) return false; // hamkorlik olib tashlangan
   try {
-    // 1. Cookiedan tokenni olish
-    // ShoxPosPro uchun: accessToken cookieda saqlangan
-    const token = req.cookies ? req.cookies.accessToken : null;
-
-    if (!token) {
-      return res.status(401).json({
-        success: false,
-        message: 'Autentifikatsiya talab qilinadi. Iltimos, tizimga kiring.'
-      });
-    }
-
-    // 2. Tokenni tekshirish (Verify)
-    // Avval verify qilamiz, agar muddati o'tgan bo'lsa darhol catch blokiga o'tadi.
-    // Bu bazaga (Blacklist) ortiqcha so'rov yuborishdan saqlaydi (Performance optimization).
-    const decoded = jwt.verify(token, config.JWT_SECRET);
-
-    // 3. Blacklist tekshirish
-    // Agarda foydalanuvchi Logout qilgan bo'lsa, token bazada bloklangan bo'ladi.
-    const isBlacklisted = await TokenBlacklistService.isBlacklisted(token);
-    if (isBlacklisted) {
-      return res.status(403).json({
-        success: false,
-        message: 'Sessiya muddati bekor qilingan. Qayta kiring.'
-      });
-    }
-
-    // 3a. ShoxPos'da admin roli YO'Q (admin — faqat OnDex platform realmida).
-    // Ochiq qolgan eski admin sessiyasi ham shu yerda to'xtaydi: aks holda
-    // marshrutlardagi `role === 'admin'` istisnolari begona do'kon ma'lumotini ochardi.
-    if (decoded.role === 'admin') {
-      return res.status(403).json({
-        success: false,
-        message: "Bu hisob uchun kirish yopilgan. OnDex administratsiyasiga murojaat qiling."
-      });
-    }
-
-    // 4. Foydalanuvchi ma'lumotlarini request obyektiga biriktirish
-    // Faqat kerakli (biznes mantiq uchun lozim bo'lgan) fieldlarni qo'shamiz
-    req.user = {
-      id: decoded.id || decoded._id, // MongoDB _id yoki JWT id fallback
-      login: decoded.login,
-      role: decoded.role,
-      deviceId: decoded.deviceId || null
-    };
-
-    // 5. Keyingi middleware yoki controllerga o'tish
-    next();
-
-  } catch (err) {
-    // Xavfsizlik uchun loglarda faqat xato nomi chiqadi, token o'zi emas
-    console.error(`🛡️ [AuthError]: ${err.name}`);
-
-    // Muddati tugagan token
-    if (err.name === 'TokenExpiredError') {
-      return res.status(401).json({
-        success: false,
-        message: 'Sessiya muddati tugadi. Iltimos, qayta kiring.',
-        code: 'TOKEN_EXPIRED'
-      });
-    }
-
-    // Noto'g'ri yoki buzilgan token
-    if (err.name === 'JsonWebTokenError') {
-      return res.status(401).json({
-        success: false,
-        message: 'Autentifikatsiya xatosi. Token yaroqsiz.'
-      });
-    }
-
-    // Boshqa kutilmagan server xatolari
-    return res.status(500).json({
-      success: false,
-      message: 'Ichki server xatosi'
-    });
+    if (syncPartnerProfile(user, identity)) await user.save();
+  } catch {
+    return false; // kategoriya aniqlanmadi — fail-closed
   }
-};
+  if ((user.ondexStoreCategory || '') !== (s.sc || '')) {
+    await bff.updateIdentity(s._id, { sc: user.ondexStoreCategory || '' });
+    s.sc = user.ondexStoreCategory || '';
+  }
+  return true;
+}
+
+/** So'rov sessiyasi (bir so'rovda bir marta hisoblanadi) yoki `null`. */
+async function authenticate(req) {
+  if (req._bff !== undefined) return req._bff;
+  let s = await bff.find(bff.cookieFrom(req));
+  if (s) s = await bff.ensureFresh(s, { ip: req.ip, onIdentity });
+  req._bff = s || null;
+  return req._bff;
+}
+
+async function verifyToken(req, res, next) {
+  try {
+    const s = await authenticate(req);
+    if (!s) {
+      return res.status(401).json({
+        success: false, code: 'SESSION_REQUIRED',
+        message: 'Autentifikatsiya talab qilinadi. Iltimos, tizimga kiring.',
+      });
+    }
+    if (s.role === 'admin') {
+      return res.status(403).json({ success: false,
+        message: 'Bu hisob uchun kirish yopilgan. OnDex administratsiyasiga murojaat qiling.' });
+    }
+    req.user = { id: String(s.userId), login: s.login, role: s.role, deviceId: s.ondexSid };
+    return next();
+  } catch (err) {
+    console.error(`🛡️ [AuthError]: ${err && err.message}`);
+    return res.status(500).json({ success: false, message: 'Ichki server xatosi' });
+  }
+}
+
+module.exports = verifyToken;
+module.exports.authenticate = authenticate;

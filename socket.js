@@ -7,27 +7,26 @@
 // tarqatardi — bir do'kon boshqa do'konlarning loginlari va onlayn vaqtini ko'rardi.
 'use strict';
 
-const jwt = require('jsonwebtoken');
-const config = require('./config');
+const bff = require('./services/bffSession');
 
 /**
- * Socket egasi — HttpOnly `accessToken` cookie'sidan (imzolangan JWT). Mijoz
- * yuborgan login'ga ISHONILMAYDI. Yaroqsiz/tokensiz socket ro'yxatga olinmaydi.
+ * Socket egasi — HttpOnly BFF sessiya cookie'sidan (A4c.4). Mijoz yuborgan
+ * login'ga ISHONILMAYDI. Sessiyasiz/yopilgan sessiyali socket ro'yxatga olinmaydi.
  */
-function socketClaims(socket) {
+async function socketClaims(socket) {
   const raw = socket.request && socket.request.headers && socket.request.headers.cookie;
   if (!raw) return null;
-  const m = raw.split(';').map((s) => s.trim()).find((s) => s.startsWith('accessToken='));
+  const name = `${bff.cookieName()}=`;
+  const m = raw.split(';').map((s) => s.trim()).find((s) => s.startsWith(name));
   if (!m) return null;
   try {
-    const decoded = jwt.verify(decodeURIComponent(m.slice('accessToken='.length)), config.JWT_SECRET);
-    if (!decoded || !decoded.login || decoded.role === 'admin') return null; // admin roli yo'q
-    return { login: decoded.login };
+    const s = await bff.find(decodeURIComponent(m.slice(name.length)));
+    if (!s || s.role === 'admin') return null; // admin roli yo'q
+    return { login: s.login, deviceId: s.ondexSid };
   } catch {
     return null;
   }
 }
-
 let io;
 const userSockets = {};
 
@@ -49,16 +48,18 @@ function removeSocket(socketId) {
 function initIO(socketIO) {
   io = socketIO;
 
-  io.on('connection', (socket) => {
-    const claims = socketClaims(socket);
-    if (claims) {
-      registerSocket(socket.id, claims.login, socket.handshake.auth?.deviceId || null);
-    }
+  io.on('connection', async (socket) => {
+    // disconnect ishlovchisi `await` dan OLDIN — tez uzilgan socket ro'yxatda qolib ketmasin.
+    socket.on('disconnect', () => removeSocket(socket.id));
+    const claims = await socketClaims(socket);
+    // Qurilma = OnDex sessiyasi: back-channel/chiqishda aynan shu socket uziladi.
+    // Sessiyasiz socket (avvalgidek) ulanib turadi, lekin hech qanday xabar olmaydi.
+    if (claims && socket.connected) registerSocket(socket.id, claims.login, claims.deviceId);
 
     // Qurilma identifikatori bilan qayta ro'yxatdan o'tish (login TOKENDAN).
     socket.on('registerUser', ({ deviceId } = {}) => {
       if (!claims) return;
-      const resolved = deviceId || socket.handshake.auth?.deviceId || null;
+      const resolved = claims.deviceId || deviceId || null;
       if (userSockets[claims.login]) {
         userSockets[claims.login] = userSockets[claims.login].filter(
           (s) => s.deviceId !== resolved || s.socketId === socket.id
@@ -66,8 +67,6 @@ function initIO(socketIO) {
       }
       registerSocket(socket.id, claims.login, resolved);
     });
-
-    socket.on('disconnect', () => removeSocket(socket.id));
   });
 }
 
@@ -90,4 +89,14 @@ function getIO() {
   return io;
 }
 
-module.exports = { initIO, getUserSockets, getSocketByDevice, sendToUser, getIO };
+/** Sessiya yopildi: shu qurilma (OnDex sid) socketlariga forceLogout va uzish. */
+function kickDevice(login, deviceId) {
+  if (!io) return;
+  for (const sid of getSocketByDevice(login, deviceId)) {
+    io.to(sid).emit('forceLogout', { reason: 'Sessiya tugatildi. Qaytadan kiring.' });
+    const sock = io.sockets && io.sockets.sockets && io.sockets.sockets.get(sid);
+    if (sock) sock.disconnect(true);
+  }
+}
+
+module.exports = { initIO, getUserSockets, getSocketByDevice, sendToUser, getIO, kickDevice };

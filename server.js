@@ -162,7 +162,6 @@ const loginProductRoutes = require('./routes/loginProducts')(csrfProtection);
 const scanProductsRouter = require('./routes/scanProducts')(csrfProtection);
 const debtsRoutes = require('./routes/debts')(csrfProtection);
 const salesRoutes = require('./routes/salesRoutes')(csrfProtection);
-const ondexAuthRouter = require('./routes/ondexAuth')(csrfProtection);
 const storeOrdersRoutes = require('./routes/storeOrders')(csrfProtection);
 const pharmacyRoutes = require('./routes/pharmacyRoutes')(csrfProtection);
 const { router: metricsRouter } = require('./routes/metrics');
@@ -183,10 +182,11 @@ app.use('/metrics', metricsRouter);
 app.use('/api/users', verifyToken, userRoutes); // Auth middleware bilan
 app.use('/api/push', verifyToken, pushRoutes);
 
-app.use('/api', ondexAuthRouter);
+// OnDex OIDC (A4c.4): kirish/chiqish/back-channel. Parol proksisi (eski ondexAuth) OLIB TASHLANDI.
+app.use('/api', require('./routes/oidcAuth')({ csrf: csrfProtection, kick: require('./socket').kickDevice }));
 app.use('/api', authRouter);
-if (!require('./services/ondexSso').isConfigured()) {
-    console.warn('⚠️  OnDex orqali kirish SOZLANMAGAN (ONDEX_API_URL, SSO_CLIENT_SECRET, SSO_REDIRECT_URI) — hech kim kira olmaydi.');
+if (!require('./services/oidcClient').isConfigured()) {
+    console.warn('⚠️  OnDex OIDC SOZLANMAGAN (ONDEX_ISSUER, OIDC_CLIENT_SECRET, OIDC_REDIRECT_URI, BFF_SESSION_KEY) — hech kim kira olmaydi.');
 }
 app.use('/api', storeOrdersRoutes);
 app.use('/api/products', loginProductRoutes);

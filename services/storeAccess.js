@@ -12,12 +12,10 @@
  *   2) FRONTEND (`src/utils/storeAccess.ts`): menyu va sahifalar yashiriladi.
  * Ikkala ro'yxat BIR XIL bo'lishi shart.
  *
- * Kategoriya JWT'dagi `sc` da turadi (imzolangan, o'zgartirib bo'lmaydi) va
- * har kirishda OnDex'dan yangilanadi.
+ * Kategoriya BFF sessiyasining `sc` maydonida turadi (serverda — mijoz
+ * o'zgartira olmaydi) va har kirishda hamda har OnDex refresh'ida (≤10 daqiqa)
+ * OnDex userinfo'dan yangilanadi (A4c.4).
  */
-
-const jwt = require('jsonwebtoken');
-const config = require('../config');
 
 const CATEGORIES = ['qurt', 'store', 'pharmacy'];
 
@@ -35,7 +33,7 @@ function shopTypeFor(category) {
  */
 const QURT_ALLOW = [
   // Sessiya va hisob (kirish, chiqish, qurilmalar, profil, sozlamalar)
-  /^\/csrf-token$/, /^\/refresh$/, /^\/logout$/, /^\/verify-session$/, /^\/me$/,
+  /^\/csrf-token$/, /^\/auth\/oidc\/(login|callback|logout|backchannel)$/, /^\/verify-session$/, /^\/me$/,
   /^\/user-status$/, /^\/user-devices$/, /^\/kick-device$/, /^\/health$/,
   /^\/users\/profile$/, /^\/push(\/|$)/,
   // Mahsulot qo'shish, mahsulotlar bazasi, kirim bazasi
@@ -54,8 +52,6 @@ const QURT_ALLOW = [
 /** Ruxsat etilgan ro'yxat ichida ham YOPIQ qoladigan yo'llar. */
 const QURT_DENY = [];
 
-/** Eskirgan (kategoriyasiz) token bilan ham ochiq: yangilash, chiqish, kirish. */
-const OUTDATED_EXEMPT = /^\/(refresh|logout|csrf-token|auth\/.*)$/;
 
 const POLICIES = {
   qurt: { allow: QURT_ALLOW, deny: QURT_DENY },
@@ -70,36 +66,19 @@ function isAllowed(category, path) {
 }
 
 /**
- * `/api` ostida global qo'riqchi. Tokenni o'zi o'qiydi (marshrutlar
- * `verifyToken` ni alohida ishlatadi): tokensiz/yaroqsiz so'rovga tegmaydi —
- * uni keyingi middleware 401 bilan rad etadi.
+ * `/api` ostida global qo'riqchi. Sessiyani `verifyToken.authenticate` bilan
+ * o'qiydi (natija so'rovda keshlanadi — marshrut qayta hisoblamaydi).
+ * Sessiyasiz so'rovga tegmaydi — uni keyingi middleware 401 bilan rad etadi.
  */
-function storeCategoryGuard(req, res, next) {
-  const token = req.cookies ? req.cookies.accessToken : null;
-  if (!token) return next();
-
-  let decoded;
+async function storeCategoryGuard(req, res, next) {
+  let s = null;
   try {
-    decoded = jwt.verify(token, config.JWT_SECRET);
+    // Kechiktirilgan require: verifyToken -> partnerProfile -> storeAccess aylanmasi.
+    s = await require('../middleware/verifyToken').authenticate(req);
   } catch {
     return next();
   }
-
-  // sc YO'Q (kategoriya joriy etilishidan oldingi token): kategoriyasi noma'lum,
-  // shuning uchun o'tkazilmaydi. 401 — frontend tokenni yangilaydi (refresh
-  // kategoriyani OnDex'dan oladi) va so'rovni qaytaradi; bo'sh sc ("") — cheklanmagan.
-  // `/refresh`, `/logout`, `/csrf-token` va kirish yo'llari ISTISNO: aks holda
-  // eski tokenli foydalanuvchi yangilana olmay, tizimdan chiqib ketardi.
-  // Admin uchun istisno YO'Q: ShoxPos'da admin roli endi yo'q (admin — faqat OnDex platform realmi).
-  if (decoded && decoded.sc === undefined && !OUTDATED_EXEMPT.test(req.path)) {
-    return res.status(401).json({
-      success: false,
-      code: 'TOKEN_OUTDATED',
-      message: 'Sessiyani yangilash kerak',
-    });
-  }
-
-  const category = decoded && decoded.sc;
+  const category = s && s.sc;
   if (!category || isAllowed(category, req.path)) return next();
 
   return res.status(403).json({
@@ -108,5 +87,4 @@ function storeCategoryGuard(req, res, next) {
     message: "Bu bo'lim sizning do'kon turingiz uchun mavjud emas",
   });
 }
-
 module.exports = { CATEGORIES, shopTypeFor, isAllowed, storeCategoryGuard };

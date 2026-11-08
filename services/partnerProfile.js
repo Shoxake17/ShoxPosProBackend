@@ -3,8 +3,8 @@
 
 /**
  * OnDex hamkor kimligidan (do'kon kategoriyasi) ShoxPos hisobi maydonlari.
- * Kirishda (`routes/ondexAuth.js`) VA tokenni yangilashda
- * (`controllers/authController.js` `refresh`) ishlatiladi: admin OnDex'da
+ * Kirishda (`routes/oidcAuth.js`) VA OnDex refresh'ida (`middleware/verifyToken.js`)
+ * ishlatiladi: admin OnDex'da
  * kategoriyani o'zgartirsa, foydalanuvchi qayta kirmasdan ham yangi
  * cheklov tokenni yangilaganda (qisqa muddatda) kuchga kiradi.
  */

@@ -1,82 +1,40 @@
 /**
  * @file routes/auth.js
- * @description OnDex Merchant web paneli sessiyasi (vaqtinchalik, A4 gacha).
+ * @description OnDex Merchant web paneli sessiyasi (A4c.4).
  *
- * ┌─ NIMA QOLDI VA NEGA ──────────────────────────────────────────────────┐
- * Kimlik, akkaunt, rol, do'kon turi va admin funksiyalari OnDex identity'ga
- * o'tdi (ADR-002): bu yerdagi `register`, foydalanuvchini aktivlashtirish/
- * bloklash, foydalanuvchilar CRUD, `shop-types`, admin rol berish OLIB TASHLANDI.
- *
- * Qolganlari — faqat panel sessiyasining o'zi (refresh, logout, holat,
- * qurilmalar). A4 bosqichida bular ham markaziy sessiyaga (OIDC + BFF)
- * almashtiriladi: docs/architecture/AUTH-PHASE-A.md (ChustApp).
- * └───────────────────────────────────────────────────────────────────────┘
+ * Kirish/chiqish — `routes/oidcAuth.js` (OnDex OIDC + BFF). Bu yerda faqat
+ * sessiya holati, profil va "Qurilmalar" (OnDex markaziy sessiyalari).
+ * `/refresh` OLIB TASHLANDI: OnDex tokenini server o'zi yangilaydi.
+ * `/logout` eski frontend uchun qoldirildi — `/auth/oidc/logout` bilan bir xil.
  */
 
 const express = require('express');
 const authController = require('../controllers/authController');
 const User = require('../models/User');
-const ShopType = require('../models/ShopType');
 const verifyToken = require('../middleware/verifyToken');
 const { cacheMiddleware, CACHE_TTL } = require('../middleware/redisCache');
 
 module.exports = (csrfProtection) => {
   const router = express.Router();
 
-  /** POST /api/refresh — panel sessiyasi tokenini yangilash. */
-  router.post('/refresh', async (req, res) => {
-    try {
-      await authController.refresh(req, res);
-    } catch (error) {
-      console.error('❌ Refresh route error:', error);
-      res.status(500).json({ success: false, message: 'Token yangilash xatosi' });
-    }
-  });
-
-  /** POST /api/logout */
-  router.post('/logout', verifyToken, csrfProtection, async (req, res) => {
-    try {
-      await authController.logout(req, res);
-    } catch (error) {
-      console.error('❌ Logout route error:', error);
-      res.status(500).json({ success: false, message: 'Logout xatosi' });
-    }
-  });
+  /** POST /api/refresh — endi kerak emas (410): sessiyani server yangilaydi. */
+  router.post('/refresh', (req, res) => res.status(410).json({ success: false, code: 'GONE',
+    message: 'Sessiya serverda avtomatik yangilanadi' }));
 
   /** GET /api/user-status — o'z hisobining holati (bloklangan/o'chirilgan). */
   router.get('/user-status', verifyToken, authController.userStatus);
 
-  /** GET /api/user-devices — o'z qurilmalari. */
-  router.get('/user-devices', verifyToken, async (req, res) => {
-    try {
-      await authController.getUserDevices(req, res);
-    } catch (error) {
-      console.error('❌ Get user devices error:', error);
-      res.status(500).json({ success: false, message: 'Qurilmalarni yuklashda xato' });
-    }
-  });
+  /** GET /api/user-devices — OnDex'dagi barcha faol sessiyalar. */
+  router.get('/user-devices', verifyToken, authController.getUserDevices);
 
-  /** POST /api/kick-device — o'z qurilmasini chiqarish. */
-  router.post('/kick-device', verifyToken, csrfProtection, async (req, res) => {
-    try {
-      await authController.kickDevice(req, res);
-    } catch (error) {
-      console.error('❌ Kick device error:', error);
-      res.status(500).json({ success: false, message: 'Qurilmani chiqarishda xato' });
-    }
-  });
+  /** POST /api/kick-device — boshqa qurilmani markazda chiqarish. */
+  router.post('/kick-device', verifyToken, csrfProtection, authController.kickDevice);
 
   /** GET /api/verify-session — joriy sessiya va do'kon profili. */
   router.get('/verify-session', verifyToken, async (req, res) => {
     try {
       const user = await User.findOne({ login: req.user.login });
-
-      let effectiveCategories = user?.shopCategories || [];
-      if (effectiveCategories.length === 0 && user?.shopType) {
-        const typeData = await ShopType.findOne({ value: user.shopType });
-        if (typeData) effectiveCategories = typeData.categories;
-      }
-
+      res.set('Cache-Control', 'no-store');
       res.json({
         success: true,
         valid: true,
@@ -84,10 +42,11 @@ module.exports = (csrfProtection) => {
           id: user?._id || req.user.id,
           login: req.user.login,
           role: req.user.role,
+          name: user?.name,
           shopName: user?.shopName,
           shopType: user?.shopType,
           storeCategory: user?.ondexStoreCategory || '',
-          shopCategories: effectiveCategories,
+          shopCategories: await authController.effectiveCategories(user),
         },
       });
     } catch (error) {
