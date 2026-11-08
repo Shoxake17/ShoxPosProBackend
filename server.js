@@ -36,8 +36,8 @@ app.set('trust proxy', 1);
 // 🔒 CORS SOZLAMALARI
 // ====================================
 const allowedOrigins = [
-    'https://pos.ondex.uz',
-    'https://pos.ondex.uz',
+    // Merchant web paneli (2026-11-08: pos.ondex.uz olib tashlandi — panel faqat POS emas).
+    'https://merchant.ondex.uz',
     'http://localhost:3000',
     'http://localhost:3001',
     'http://localhost:5173',

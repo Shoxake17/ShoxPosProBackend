@@ -17,7 +17,7 @@ const env = cleanEnv(process.env, {
   ONDEX_API_INTERNAL_URL: str({ default: '', desc: 'Server-server so\'rovlar uchun ichki manzil (bo\'sh — ONDEX_ISSUER)' }),
   OIDC_CLIENT_ID:         str({ default: 'merchant-web' }),
   OIDC_CLIENT_SECRET:     str({ default: '', desc: 'OnDex OIDC_MERCHANT_WEB_SECRET bilan BIR XIL (>= 32)' }),
-  OIDC_REDIRECT_URI:      str({ default: '', desc: 'OnDex ro\'yxatidagi bilan ANIQ teng: https://pos.ondex.uz/api/auth/oidc/callback' }),
+  OIDC_REDIRECT_URI:      str({ default: '', desc: 'OnDex ro\'yxatidagi bilan ANIQ teng: https://merchant.ondex.uz/api/auth/oidc/callback' }),
   OIDC_POST_LOGOUT_URI:   str({ default: '', desc: 'Chiqishdan keyin qaytish (OnDex ro\'yxatida bo\'lishi shart)' }),
   BFF_SESSION_KEY:        str({ default: '', desc: '32 bayt (64 hex): OnDex tokenlarini bazada shifrlash kaliti' }),
 
