@@ -66,8 +66,10 @@ module.exports = (csrfProtection) => {
     limit: 60,
     standardHeaders: true,
     legacyHeaders: false,
+    // Kalit IP emas, login — express-rate-limit v7 da IP tekshiruvi talab qilinmaydi.
+    // (`validate.keyGeneratorIpFallback` faqat v8 da bor; v7 da ValidationError logga
+    // tushardi — 2026-11-12, SEC-5. tests/rateLimitConfig.test.js qo'riqlaydi.)
     keyGenerator: (req) => `qo:${req.user && req.user.login}`,
-    validate: { keyGeneratorIpFallback: false },
     message: { success: false, message: "Juda ko'p urinish. Birozdan so'ng qayta urining" },
   });
 
