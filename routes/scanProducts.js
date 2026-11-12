@@ -17,7 +17,7 @@ router.get("/scan-product/:login", verifyToken, async (req, res) => {
 
     // 🛡️ A01: Broken Access Control
     const safeLogin = String(login).trim().toLowerCase();
-    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+    if (req.user.login !== safeLogin) {
       return res.status(403).json({ message: "Ruxsat etilmagan!" });
     }
 

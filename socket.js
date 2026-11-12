@@ -21,7 +21,7 @@ async function socketClaims(socket) {
   if (!m) return null;
   try {
     const s = await bff.find(decodeURIComponent(m.slice(name.length)));
-    if (!s || s.role === 'admin') return null; // admin roli yo'q
+    if (!s) return null;
     return { login: s.login, deviceId: s.ondexSid };
   } catch {
     return null;

@@ -1,7 +1,6 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const verifyToken = require('../middleware/verifyToken');
-const { cacheMiddleware, invalidateUserCache, CACHE_TTL } = require('../middleware/redisCache');
 const AuditService = require('../services/auditService');
 const User = require('../models/User');
 const ShopType = require('../models/ShopType');
@@ -24,7 +23,7 @@ router.post('/sell-product/:login', verifyToken, csrfProtection, async (req, res
 
     // 🛡️ A01: Broken Access Control
     const safeLogin = String(login).trim().toLowerCase();
-    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+    if (req.user.login !== safeLogin) {
       return res.status(403).json({ success: false, message: 'Ruxsat etilmagan!' });
     }
 
@@ -183,12 +182,12 @@ router.post('/sell-product/:login', verifyToken, csrfProtection, async (req, res
 });
 
 // ✅ Sotuvlarni yuklash (Lifetime archive dan) - 3 daqiqa cache
-router.get('/sales/:login', verifyToken, cacheMiddleware(CACHE_TTL.MEDIUM), async (req, res) => {
+router.get('/sales/:login', verifyToken, async (req, res) => {
   try {
     const { login } = req.params;
     
     const safeLogin = String(login).trim().toLowerCase();
-    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+    if (req.user.login !== safeLogin) {
       return res.status(403).json({ success: false, message: 'Ruxsat etilmagan!' });
     }
 
@@ -200,11 +199,11 @@ router.get('/sales/:login', verifyToken, cacheMiddleware(CACHE_TTL.MEDIUM), asyn
 });
 
 // 🔹 Sotilganlar (Sotilgan.tsx) uchun — bucketlardan o'qish - 3 daqiqa cache
-router.get('/sold-buckets/:login', verifyToken, cacheMiddleware(CACHE_TTL.MEDIUM), async (req, res) => {
+router.get('/sold-buckets/:login', verifyToken, async (req, res) => {
   try {
     const { login } = req.params;
     const safeLogin = String(login).trim().toLowerCase();
-    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+    if (req.user.login !== safeLogin) {
       return res.status(403).json({ success: false, message: 'Ruxsat etilmagan!' });
     }
 
@@ -228,7 +227,7 @@ router.get('/sold-buckets/:login/by-date', verifyToken, async (req, res) => {
     const { login } = req.params;
     const { startDate, endDate } = req.query;
     const safeLogin = String(login).trim().toLowerCase();
-    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+    if (req.user.login !== safeLogin) {
       return res.status(403).json({ success: false, message: 'Ruxsat etilmagan!' });
     }
     const start = startDate ? new Date(startDate) : null;
@@ -260,7 +259,7 @@ router.get('/sales/:login/by-date', verifyToken, async (req, res) => {
     const { startDate, endDate } = req.query;
 
     const safeLogin = String(login).trim().toLowerCase();
-    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+    if (req.user.login !== safeLogin) {
       return res.status(403).json({ success: false, message: 'Ruxsat etilmagan!' });
     }
 
@@ -282,7 +281,7 @@ router.get('/sales/:login/stats', verifyToken, async (req, res) => {
     const { login } = req.params;
 
     const safeLogin = String(login).trim().toLowerCase();
-    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+    if (req.user.login !== safeLogin) {
       return res.status(403).json({ success: false, message: 'Ruxsat etilmagan!' });
     }
 
@@ -302,7 +301,7 @@ router.delete('/sales/:login/:id', verifyToken, csrfProtection, async (req, res)
     const { login, id } = req.params;
 
     const safeLogin = String(login).trim().toLowerCase();
-    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+    if (req.user.login !== safeLogin) {
       return res.status(403).json({ success: false, message: 'Ruxsat etilmagan!' });
     }
 

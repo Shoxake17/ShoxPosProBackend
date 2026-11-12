@@ -80,9 +80,9 @@ exports.kickDevice = async (req, res) => {
 // Foydalanuvchi holati — FAQAT o'zi (login sessiyadan).
 exports.userStatus = async (req, res) => {
   try {
-    const user = await User.findOne({ login: { $eq: req.user.login } }).select('login blocked active isDeleted').lean();
+    const user = await User.findOne({ login: { $eq: req.user.login } }).select('login blocked isDeleted').lean();
     if (!user) return res.status(404).json({ error: 'Foydalanuvchi topilmadi' });
-    res.json({ login: user.login, blocked: Boolean(user.blocked), active: Boolean(user.active), deleted: Boolean(user.isDeleted) });
+    res.json({ login: user.login, blocked: Boolean(user.blocked), deleted: Boolean(user.isDeleted) });
   } catch {
     res.status(500).json({ error: 'Server xatosi' });
   }
@@ -91,12 +91,12 @@ exports.userStatus = async (req, res) => {
 // GET /api/me. Obuna rejasi YO'Q — u OnDex'da.
 exports.getMe = async (req, res) => {
   try {
-    const user = await User.findById(req.user.id).select('-password').lean();
+    const user = await User.findById(req.user.id).lean();
     if (!user) return res.status(404).json({ success: false, message: 'Foydalanuvchi topilmadi' });
     res.status(200).json({
       success: true,
       user: {
-        id: user._id, login: user.login, role: user.role, name: user.name,
+        id: user._id, login: user.login, name: user.name,
         shopName: user.shopName, shopType: user.shopType,
         storeCategory: user.ondexStoreCategory || '',
         shopCategories: await effectiveCategories(user),

@@ -98,7 +98,6 @@ async function resolveUser(identity) {
   try {
     return await User.create({
       login: phone,
-      role: 'cashier',
       ondexUserId: identity.userId,
       ondexPhone: phone,
       ondexPartnerRole: identity.partnerRole,
@@ -116,7 +115,6 @@ async function resolveUser(identity) {
 /** Kirishga to'sqinlik sababi ('' — kirish mumkin). */
 function denyReason(user) {
   if (!user) return 'not_linked';
-  if (user.role === 'admin') return 'not_linked'; // ShoxPos'da admin roli yo'q
   if (user.isDeleted) return 'deleted';
   if (user.blocked) return 'blocked';
   return '';

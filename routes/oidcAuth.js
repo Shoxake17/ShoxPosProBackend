@@ -113,7 +113,6 @@ module.exports = (deps = {}) => {
       syncPartnerProfile(user, identity);
       // Profil rasmi — OnDex akkauntidan (markazlashgan; Cloudinary yo'q).
       user.avatarUrl = typeof ui.picture === 'string' ? ui.picture : '';
-      user.activeDevice = { deviceId: claims.sid, deviceType: 'web', deviceOS: 'browser', lastLogin: new Date() };
       await user.save();
 
       const { sid, expiresAt } = await bff.create({ user, tokens, idToken: tokens.id_token, claims,

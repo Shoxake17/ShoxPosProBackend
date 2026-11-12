@@ -4,22 +4,15 @@
  *
  * Kirish/chiqish — `routes/oidcAuth.js` (OnDex OIDC + BFF). Bu yerda faqat
  * sessiya holati, profil va "Qurilmalar" (OnDex markaziy sessiyalari).
- * `/refresh` OLIB TASHLANDI: OnDex tokenini server o'zi yangilaydi.
- * `/logout` eski frontend uchun qoldirildi — `/auth/oidc/logout` bilan bir xil.
  */
 
 const express = require('express');
 const authController = require('../controllers/authController');
 const User = require('../models/User');
 const verifyToken = require('../middleware/verifyToken');
-const { cacheMiddleware, CACHE_TTL } = require('../middleware/redisCache');
 
 module.exports = (csrfProtection) => {
   const router = express.Router();
-
-  /** POST /api/refresh — endi kerak emas (410): sessiyani server yangilaydi. */
-  router.post('/refresh', (req, res) => res.status(410).json({ success: false, code: 'GONE',
-    message: 'Sessiya serverda avtomatik yangilanadi' }));
 
   /** GET /api/user-status — o'z hisobining holati (bloklangan/o'chirilgan). */
   router.get('/user-status', verifyToken, authController.userStatus);
@@ -41,7 +34,6 @@ module.exports = (csrfProtection) => {
         user: {
           id: user?._id || req.user.id,
           login: req.user.login,
-          role: req.user.role,
           name: user?.name,
           shopName: user?.shopName,
           shopType: user?.shopType,
@@ -56,7 +48,7 @@ module.exports = (csrfProtection) => {
   });
 
   /** GET /api/me */
-  router.get('/me', verifyToken, cacheMiddleware(CACHE_TTL.MEDIUM), authController.getMe);
+  router.get('/me', verifyToken, authController.getMe);
 
   /** GET /api/health */
   router.get('/health', (req, res) => {

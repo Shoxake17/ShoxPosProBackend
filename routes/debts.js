@@ -1,19 +1,18 @@
 const express = require("express");
 const verifyToken = require('../middleware/verifyToken');
-const { cacheMiddleware, invalidateUserCache, CACHE_TTL } = require('../middleware/redisCache');
 const Debt = require('../models/Debt');
 
 module.exports = (csrfProtection) => {
   const router = express.Router();
 
 // Barcha qarzlarni olish - 3 daqiqa cache
-router.get("/debts/:login", verifyToken, cacheMiddleware(CACHE_TTL.MEDIUM), async (req, res) => {
+router.get("/debts/:login", verifyToken, async (req, res) => {
   try {
     const { login } = req.params;
     
     // 🛡️ A01: Broken Access Control
     const safeLogin = String(login).trim().toLowerCase();
-    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+    if (req.user.login !== safeLogin) {
       return res.status(403).json({ message: "Ruxsat etilmagan!" });
     }
 
@@ -42,7 +41,7 @@ router.post("/debts/:login", verifyToken, csrfProtection, async (req, res) => {
 
     // 🛡️ A01: Broken Access Control
     const safeLogin = String(login).trim().toLowerCase();
-    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+    if (req.user.login !== safeLogin) {
       return res.status(403).json({ message: "Ruxsat etilmagan!" });
     }
 
@@ -78,7 +77,7 @@ router.post("/debts/pay/:login", verifyToken, csrfProtection, async (req, res) =
 
     // 🛡️ A01: Broken Access Control
     const safeLogin = String(login).trim().toLowerCase();
-    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+    if (req.user.login !== safeLogin) {
       return res.status(403).json({ message: "Ruxsat etilmagan!" });
     }
 

@@ -17,7 +17,6 @@ const bffSessionSchema = new mongoose.Schema({
   _id: { type: String }, // sha256(cookie) hex
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
   login: { type: String, required: true },
-  role: { type: String, required: true },
   sc: { type: String, default: '' }, // do'kon kategoriyasi (storeAccess)
   ondexSub: { type: String, required: true },
   ondexSid: { type: String, required: true, index: true },

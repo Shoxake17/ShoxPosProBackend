@@ -79,7 +79,7 @@ async function create({ user, tokens, idToken, claims, ip, userAgent }) {
   const sid = crypto.randomBytes(32).toString('base64url');
   const now = Date.now();
   await BffSession.create({
-    _id: hash(sid), userId: user._id, login: user.login, role: user.role, sc: user.ondexStoreCategory || '',
+    _id: hash(sid), userId: user._id, login: user.login, sc: user.ondexStoreCategory || '',
     ondexSub: claims.sub, ondexSid: claims.sid,
     accessEnc: seal(tokens.access_token), accessExp: new Date(now + (Number(tokens.expires_in) || 600) * 1000),
     refreshEnc: seal(tokens.refresh_token), idTokenEnc: idToken ? seal(idToken) : '',

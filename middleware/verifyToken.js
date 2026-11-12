@@ -10,8 +10,9 @@
  * almashishi, xodim bo'shatilishi) — back-channel orqali darhol, eng yomon
  * holatda keyingi refresh'da (≤10 daqiqa) bu yerda ham tugaydi.
  *
- * `req.user` shakli avvalgidek: { id, login, role, deviceId } — marshrutlar
- * o'zgarmaydi. `deviceId` = OnDex sessiya ID (`sid`).
+ * `req.user` = { id, login, deviceId }. `login` — tenant kaliti: har marshrut
+ * FAQAT o'z login'i ma'lumotiga kiradi ("hamma do'konni ko'radigan" rol YO'Q,
+ * 2026-11-12). `deviceId` = OnDex sessiya ID (`sid`).
  */
 
 const bff = require('../services/bffSession');
@@ -62,11 +63,7 @@ async function verifyToken(req, res, next) {
         message: 'Autentifikatsiya talab qilinadi. Iltimos, tizimga kiring.',
       });
     }
-    if (s.role === 'admin') {
-      return res.status(403).json({ success: false,
-        message: 'Bu hisob uchun kirish yopilgan. OnDex administratsiyasiga murojaat qiling.' });
-    }
-    req.user = { id: String(s.userId), login: s.login, role: s.role, deviceId: s.ondexSid };
+    req.user = { id: String(s.userId), login: s.login, deviceId: s.ondexSid };
     return next();
   } catch (err) {
     console.error(`🛡️ [AuthError]: ${err && err.message}`);

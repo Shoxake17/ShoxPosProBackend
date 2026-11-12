@@ -8,14 +8,13 @@ const fetch = require("node-fetch").default;
 const { escapeRegex, sanitizeString } = require("../utils/escapeRegex");
 const verifyToken = require("../middleware/verifyToken");
 const AuditService = require("../services/auditService");
-const { cacheMiddleware, invalidateUserCache, CACHE_TTL } = require("../middleware/redisCache");
 
 module.exports = (csrfProtection) => {
   const router = express.Router();
 
   // 1. Qidiruv (Umumiy yoki Foydalanuvchi mahsulotlari) - 30 soniya cache
   // MUHIM: Bu route "/" dan yuqorida bo'lishi kerak
-  router.get("/search", verifyToken, cacheMiddleware(CACHE_TTL.SHORT), async (req, res) => {
+  router.get("/search", verifyToken, async (req, res) => {
     try {
       const { q = "", category = "", login } = req.query;
 
@@ -65,7 +64,7 @@ module.exports = (csrfProtection) => {
 
   // 2. Umumiy mahsulotlar soni - 10 daqiqa cache
   // MUHIM: Bu route "/" dan yuqorida bo'lishi kerak
-  router.get("/count", verifyToken, cacheMiddleware(CACHE_TTL.LONG), async (req, res) => {
+  router.get("/count", verifyToken, async (req, res) => {
     try {
       const count = await ProductBase.countDocuments();
       res.json({ count });
@@ -101,11 +100,11 @@ module.exports = (csrfProtection) => {
   });
 
   // 4. Foydalanuvchi mahsulotlarini olish (Shared products dan) - 3 daqiqa cache
-  router.get("/user-products/:login", verifyToken, cacheMiddleware(CACHE_TTL.MEDIUM), async (req, res) => {
+  router.get("/user-products/:login", verifyToken, async (req, res) => {
     try {
       const { login } = req.params;
       const safeLogin = String(login || '').trim().toLowerCase();
-      if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      if (req.user.login !== safeLogin) {
         return res.status(403).json({ message: "Ruxsat etilmagan!" });
       }
       const products = await Product.find({ login: safeLogin }).sort({ name: 1 });
@@ -121,7 +120,7 @@ module.exports = (csrfProtection) => {
     try {
       const { login } = req.params;
       const safeLogin = String(login || '').trim().toLowerCase();
-      if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      if (req.user.login !== safeLogin) {
         return res.status(403).json({ message: "Ruxsat etilmagan!" });
       }
       const items = await Product.find({ login: safeLogin, incomingQuantity: { $gt: 0 } })
@@ -149,7 +148,7 @@ module.exports = (csrfProtection) => {
     try {
       let { name, price, basePrice, barcode, category, quantity = 0, login } = req.body;
       const safeLogin = String(login || '').trim().toLowerCase();
-      if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      if (req.user.login !== safeLogin) {
         return res.status(403).json({ message: "Ruxsat etilmagan!" });
       }
 
@@ -182,7 +181,6 @@ module.exports = (csrfProtection) => {
       }
 
       // 🗑️ Cache invalidatsiya - mahsulot qo'shilganda eski cache'larni tozalash
-      await invalidateUserCache(safeLogin);
       
       res.json({ message: "Mahsulot qo'shildi", product: updated });
       await AuditService.logUserAction({
@@ -202,7 +200,7 @@ module.exports = (csrfProtection) => {
     try {
       const { barcode, newPrice, login } = req.body;
       const safeLogin = String(login || '').trim().toLowerCase();
-      if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      if (req.user.login !== safeLogin) {
         return res.status(403).json({ message: "Ruxsat etilmagan!" });
       }
       const updated = await Product.findOneAndUpdate(
@@ -244,7 +242,7 @@ module.exports = (csrfProtection) => {
     try {
       const { barcode, newQuantity, login } = req.body;
       const safeLogin = String(login || '').trim().toLowerCase();
-      if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      if (req.user.login !== safeLogin) {
         return res.status(403).json({ message: "Ruxsat etilmagan!" });
       }
       const updated = await Product.findOneAndUpdate(
@@ -264,7 +262,7 @@ module.exports = (csrfProtection) => {
     try {
       const { barcode, login } = req.body;
       const safeLogin = String(login || '').trim().toLowerCase();
-      if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      if (req.user.login !== safeLogin) {
         return res.status(403).json({ message: "Ruxsat etilmagan!" });
       }
       const result = await Product.deleteOne({ login: safeLogin, barcode });

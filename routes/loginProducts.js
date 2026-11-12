@@ -87,7 +87,7 @@ router.get("/products/:login", verifyToken, async (req, res) => {
     safeLogin = sanitizeLogin(req.params.login);
     
     // 🛡️ A01: Broken Access Control
-    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+    if (req.user.login !== safeLogin) {
       return res.status(403).json({ message: "Ruxsat etilmagan!" });
     }
   } catch (e) {
@@ -131,7 +131,7 @@ router.post("/sync-products/:login", verifyToken, csrfProtection, async (req, re
     safeLogin = sanitizeLogin(req.params.login);
     
     // 🛡️ A01: Broken Access Control
-    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+    if (req.user.login !== safeLogin) {
       return res.status(403).json({ message: "Ruxsat etilmagan!" });
     }
   } catch (e) {
@@ -213,7 +213,7 @@ router.post("/update-price/:login", verifyToken, csrfProtection, async (req, res
   let safeLogin;
   try {
     safeLogin = sanitizeLogin(req.params.login);
-    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+    if (req.user.login !== safeLogin) {
       return res.status(403).json({ message: "Ruxsat etilmagan!" });
     }
   } catch (e) {
@@ -244,7 +244,7 @@ router.post("/update-base-price/:login", verifyToken, csrfProtection, async (req
   let safeLogin;
   try {
     safeLogin = sanitizeLogin(req.params.login);
-    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+    if (req.user.login !== safeLogin) {
       return res.status(403).json({ message: "Ruxsat etilmagan!" });
     }
   } catch (e) {
@@ -275,7 +275,7 @@ router.post("/update-quantity/:login", verifyToken, csrfProtection, async (req, 
   let safeLogin;
   try {
     safeLogin = sanitizeLogin(req.params.login);
-    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+    if (req.user.login !== safeLogin) {
       return res.status(403).json({ message: "Ruxsat etilmagan!" });
     }
   } catch (e) {
@@ -306,7 +306,7 @@ router.post("/update-or-add-user-product", verifyToken, csrfProtection, async (r
   let safeLogin;
   try {
     safeLogin = sanitizeLogin(req.body.login);
-    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+    if (req.user.login !== safeLogin) {
       return res.status(403).json({ message: "Ruxsat etilmagan!" });
     }
   } catch (e) {
@@ -413,7 +413,7 @@ router.delete("/delete-product/:login/:barcode", verifyToken, csrfProtection, as
   let safeLogin;
   try {
     safeLogin = sanitizeLogin(req.params.login);
-    if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+    if (req.user.login !== safeLogin) {
       return res.status(403).json({ message: "Ruxsat etilmagan!" });
     }
   } catch (e) {

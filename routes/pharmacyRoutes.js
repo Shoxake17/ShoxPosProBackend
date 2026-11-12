@@ -3,7 +3,6 @@ const mongoose = require("mongoose");
 const verifyToken = require('../middleware/verifyToken');
 const AuditService = require('../services/auditService');
 const { escapeRegex, sanitizeString } = require("../utils/escapeRegex");
-const { cacheMiddleware, invalidateUserCache, CACHE_TTL } = require("../middleware/redisCache");
 
 const PharmProduct = require("../models/PharmProduct");
 const PharmBase = require("../models/PharmBase");
@@ -68,7 +67,7 @@ module.exports = (csrfProtection) => {
   });
 
   // 1. Dorilarni qidirish (Umumiy yoki Foydalanuvchi dorilar)
-  router.get("/search", verifyToken, cacheMiddleware(CACHE_TTL.SHORT), async (req, res) => {
+  router.get("/search", verifyToken, async (req, res) => {
     try {
       const { q = "", category = "", login } = req.query;
       let filter = {};
@@ -117,12 +116,12 @@ module.exports = (csrfProtection) => {
   });
 
   // 2. Foydalanuvchi dorilarini olish
-  router.get("/user-pharm-products/:login", verifyToken, cacheMiddleware(CACHE_TTL.MEDIUM), async (req, res) => {
+  router.get("/user-pharm-products/:login", verifyToken, async (req, res) => {
     try {
       const { login } = req.params;
       const safeLogin = sanitizeLogin(login);
       
-      if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      if (req.user.login !== safeLogin) {
         return res.status(403).json({ message: "Ruxsat etilmagan!" });
       }
       
@@ -144,7 +143,7 @@ module.exports = (csrfProtection) => {
       } = req.body;
       
       const safeLogin = sanitizeLogin(login);
-      if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      if (req.user.login !== safeLogin) {
         return res.status(403).json({ message: "Ruxsat etilmagan!" });
       }
 
@@ -190,7 +189,6 @@ module.exports = (csrfProtection) => {
         }
       }
 
-      await invalidateUserCache(safeLogin);
       
       res.json({ message: "Dori qo'shildi", product: updated });
       
@@ -260,7 +258,7 @@ module.exports = (csrfProtection) => {
       const { barcode, login } = req.body;
       const safeLogin = sanitizeLogin(login);
       
-      if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      if (req.user.login !== safeLogin) {
         return res.status(403).json({ message: "Ruxsat etilmagan!" });
       }
       
@@ -269,7 +267,6 @@ module.exports = (csrfProtection) => {
       
       if (result.deletedCount === 0) return res.status(404).json({ message: "Dori topilmadi" });
       
-      await invalidateUserCache(safeLogin);
       res.json({ message: "Dori o'chirildi" });
     } catch (err) {
       console.error("Dori o'chirishda xato:", err);
@@ -284,7 +281,7 @@ module.exports = (csrfProtection) => {
       const safeLogin = sanitizeLogin(login);
       const sBarcode = sanitizeBarcode(barcode);
       
-      if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      if (req.user.login !== safeLogin) {
         return res.status(403).json({ message: "Ruxsat etilmagan!" });
       }
       
@@ -298,7 +295,6 @@ module.exports = (csrfProtection) => {
       
       if (!result) return res.status(404).json({ message: "Dori topilmadi" });
       
-      await invalidateUserCache(safeLogin);
       res.json({ message: "Narx yangilandi", product: result });
     } catch (err) {
       console.error("Narx yangilashda xato:", err);
@@ -313,7 +309,7 @@ module.exports = (csrfProtection) => {
       const safeLogin = sanitizeLogin(login);
       const sBarcode = sanitizeBarcode(barcode);
       
-      if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      if (req.user.login !== safeLogin) {
         return res.status(403).json({ message: "Ruxsat etilmagan!" });
       }
       
@@ -327,7 +323,6 @@ module.exports = (csrfProtection) => {
       
       if (!result) return res.status(404).json({ message: "Dori topilmadi" });
       
-      await invalidateUserCache(safeLogin);
       res.json({ message: "Asosiy narx yangilandi", product: result });
     } catch (err) {
       console.error("Asosiy narx yangilashda xato:", err);
@@ -342,7 +337,7 @@ module.exports = (csrfProtection) => {
       const safeLogin = sanitizeLogin(login);
       const sBarcode = sanitizeBarcode(barcode);
       
-      if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      if (req.user.login !== safeLogin) {
         return res.status(403).json({ message: "Ruxsat etilmagan!" });
       }
       
@@ -356,7 +351,6 @@ module.exports = (csrfProtection) => {
       
       if (!result) return res.status(404).json({ message: "Dori topilmadi" });
       
-      await invalidateUserCache(safeLogin);
       res.json({ message: "Miqdor yangilandi", product: result });
     } catch (err) {
       console.error("Miqdor yangilashda xato:", err);
@@ -371,7 +365,7 @@ module.exports = (csrfProtection) => {
       const safeLogin = sanitizeLogin(login);
       const sBarcode = sanitizeBarcode(barcode);
       
-      if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      if (req.user.login !== safeLogin) {
         return res.status(403).json({ message: "Ruxsat etilmagan!" });
       }
 
@@ -402,7 +396,6 @@ module.exports = (csrfProtection) => {
 
       if (!result) return res.status(404).json({ message: "Dori topilmadi" });
 
-      await invalidateUserCache(safeLogin);
       res.json({ message: "Ma'lumotlar yangilandi", product: result });
     } catch (err) {
       console.error("Ma'lumotlar yangilashda xato:", err);
@@ -411,12 +404,12 @@ module.exports = (csrfProtection) => {
   });
 
   // 8. Dorixona kirim bazasi
-  router.get("/pharm-kirim/:login", verifyToken, cacheMiddleware(CACHE_TTL.MEDIUM), async (req, res) => {
+  router.get("/pharm-kirim/:login", verifyToken, async (req, res) => {
     try {
       const { login } = req.params;
       const safeLogin = sanitizeLogin(login);
       
-      if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      if (req.user.login !== safeLogin) {
         return res.status(403).json({ message: "Ruxsat etilmagan!" });
       }
       
@@ -471,7 +464,7 @@ module.exports = (csrfProtection) => {
       let { login, items, paymentMethod = "naqd" } = req.body;
       const safeLogin = sanitizeLogin(login);
       
-      if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      if (req.user.login !== safeLogin) {
         return res.status(403).json({ message: "Ruxsat etilmagan!" });
       }
 
@@ -528,7 +521,6 @@ module.exports = (csrfProtection) => {
       });
       await sale.save();
 
-      await invalidateUserCache(safeLogin);
 
       await AuditService.logUserAction({
         login: req.user.login,
@@ -551,7 +543,7 @@ module.exports = (csrfProtection) => {
       const { login } = req.params;
       const safeLogin = sanitizeLogin(login);
 
-      if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      if (req.user.login !== safeLogin) {
         return res.status(403).json({ message: "Ruxsat etilmagan!" });
       }
 
@@ -570,7 +562,7 @@ module.exports = (csrfProtection) => {
       const { q } = req.query;
       const safeLogin = sanitizeLogin(login);
       
-      if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      if (req.user.login !== safeLogin) {
         return res.status(403).json({ message: "Ruxsat etilmagan!" });
       }
       
@@ -606,7 +598,7 @@ module.exports = (csrfProtection) => {
       const safeLogin = sanitizeLogin(login);
       
       
-      if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      if (req.user.login !== safeLogin) {
         return res.status(403).json({ message: "Ruxsat etilmagan!" });
       }
       
@@ -655,7 +647,7 @@ module.exports = (csrfProtection) => {
       const { login } = req.params;
       const safeLogin = sanitizeLogin(login);
       
-      if (req.user.login !== safeLogin && req.user.role !== 'admin') {
+      if (req.user.login !== safeLogin) {
         return res.status(403).json({ message: "Ruxsat etilmagan!" });
       }
 

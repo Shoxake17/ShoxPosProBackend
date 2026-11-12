@@ -106,14 +106,14 @@ test('userinfo -> kimlik: hamkor, A3 biznesi, hech biri', () => {
   assert.equal(s.partnerRole, '', "to'xtatilgan tashkilot hisob ochmaydi");
   assert.equal(account.identityFromUserinfo({ sub: 'u4', partner: { role: 'customer', entity_id: 'x' } }).partnerRole, '');
   assert.equal(account.denyReason(null), 'not_linked');
-  assert.equal(account.denyReason({ role: 'admin' }), 'not_linked');
-  assert.equal(account.denyReason({ role: 'cashier', blocked: true }), 'blocked');
-  assert.equal(account.denyReason({ role: 'cashier' }), '');
+  assert.equal(account.denyReason({ blocked: true }), 'blocked');
+  assert.equal(account.denyReason({ isDeleted: true }), 'deleted');
+  assert.equal(account.denyReason({}), '');
 });
 
 // ── ensureFresh: Mongo va OnDex'siz (model va klient almashtiriladi) ──────
 function sessionDoc(over = {}) {
-  return { _id: 'h1', userId: 'u', login: 'l', role: 'cashier', sc: '', ondexSub: 'u1', ondexSid: 's1',
+  return { _id: 'h1', userId: 'u', login: 'l', sc: '', ondexSub: 'u1', ondexSid: 's1',
     accessEnc: bff.seal('acc-old'), refreshEnc: bff.seal('ort_old'), accessExp: new Date(Date.now() - 1000),
     expiresAt: new Date(Date.now() + 3600e3), revokedAt: null, ...over };
 }
